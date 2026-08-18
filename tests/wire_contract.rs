@@ -46,7 +46,7 @@ fn parses_transactions_page_and_converts() {
         .into_iter()
         .find(|t| t.id == "09746507-7a03-4dab-a253-68dcbb4a9cde")
         .expect("known transaction present");
-    let domain: Transaction = wire.into();
+    let domain: Transaction = wire.try_into().expect("consistent capture");
 
     // signed_amount_cents is positive-for-income; domain keeps that convention.
     assert_eq!(domain.amount_minor, 82_700);
@@ -114,4 +114,22 @@ fn formatted_money_parser_is_strict() {
     assert_eq!(parse_formatted_money("€1.234,56", "EUR"), None); // unsupported locale layout
     assert_eq!(parse_formatted_money("$430.14 CR", "USD"), None); // trailing junk
     assert_eq!(parse_formatted_money("", "USD"), None);
+}
+
+#[test]
+fn blank_merchant_falls_back_to_description_for_counterparty() {
+    let raw = r#"{
+        "id": "t-1", "date": "2026-08-01",
+        "amount_cents": 100, "signed_amount_cents": -100,
+        "currency": "USD", "name": "ACME MARKET",
+        "classification": "expense",
+        "account": { "id": "a-1", "name": "A" },
+        "category": null,
+        "merchant": { "name": "   " },
+        "transfer": null,
+        "updated_at": "2026-08-01T00:00:00Z"
+    }"#;
+    let wire: veille::source::wire::WireTransaction = serde_json::from_str(raw).expect("parse");
+    let domain: Transaction = wire.try_into().expect("consistent");
+    assert_eq!(domain.counterparty_key.as_deref(), Some("acme market"));
 }

@@ -2,10 +2,12 @@
 //! with a per-tenant `read`-scoped API key.
 //!
 //! The HTTP layer is structurally read-only: [`ReadOnlyHttp`] exposes exactly
-//! one operation, a GET. There is no way to send a mutating verb through this
-//! module, matching invariant §2.1 on our side of the wire (the server
-//! enforces it on its side by rejecting writes from `read`-scoped keys).
+//! one operation, a GET, and never follows redirects. There is no way to send
+//! a mutating verb through this module, matching invariant §2.1 on our side
+//! of the wire (the server enforces it on its side by rejecting writes from
+//! `read`-scoped keys).
 
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -13,7 +15,9 @@ use chrono::{DateTime, Utc};
 use reqwest::Url;
 use serde::de::DeserializeOwned;
 
-use super::wire::{self, AccountsPage, HoldingsPage, SyncsPage, TransactionsPage, WireSync};
+use super::wire::{
+    self, AccountsPage, HoldingsPage, SyncsPage, TransactionsPage, WireAccount, WireSync,
+};
 use super::{Result, SourceError, SureSource};
 use crate::domain::{Account, Holding, Transaction, UpstreamHealth};
 
@@ -23,6 +27,10 @@ const PER_PAGE: u32 = 100;
 /// successful sync among the newest 1000 sync records reports `None`, which
 /// the sync-stale rule reads as "stale" — the conservative direction.
 const MAX_SYNC_PAGES: u32 = 10;
+/// Hard cap on data-endpoint pagination (200 pages × 100 rows = 20k rows,
+/// far beyond household scale). A server whose `total_pages` keeps growing
+/// gets a loud contract error instead of an unbounded crawl.
+const MAX_DATA_PAGES: u32 = 200;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A GET-only HTTP client. Deliberately incapable of any other verb.
@@ -76,6 +84,11 @@ impl ApiSureSource {
             .map_err(|e| SourceError::Request(format!("invalid base url: {e}")))?;
         let client = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
+            // Never follow redirects: Sure's API does not legitimately
+            // redirect, and following one would forward X-Api-Key (which
+            // reqwest's cross-host sanitization does NOT strip, unlike
+            // Authorization) to an arbitrary host.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| SourceError::Request(format!("http client init: {e}")))?;
         Ok(Self {
@@ -87,21 +100,54 @@ impl ApiSureSource {
         })
     }
 
-    async fn fetch_all_accounts(&self) -> Result<Vec<super::wire::WireAccount>> {
+    /// Fetch every page of a paginated endpoint, bounded by
+    /// [`MAX_DATA_PAGES`], deduplicating rows by key (a server that ignores
+    /// the `page` parameter must not double-count anything).
+    async fn fetch_paged<P, T, K>(
+        &self,
+        path: &'static str,
+        extra: &[(&'static str, String)],
+        split: impl Fn(P) -> (Vec<T>, u32),
+        dedupe_key: impl Fn(&T) -> K,
+    ) -> Result<Vec<T>>
+    where
+        P: DeserializeOwned,
+        K: Ord,
+    {
         let mut page = 1u32;
-        let mut out = Vec::new();
+        let mut out: Vec<T> = Vec::new();
+        let mut seen: BTreeSet<K> = BTreeSet::new();
         loop {
-            let body: AccountsPage = self
-                .http
-                .get_json("/api/v1/accounts", &page_query(page, &[]))
-                .await?;
-            let total_pages = body.pagination.total_pages;
-            out.extend(body.accounts);
+            let body: P = self.http.get_json(path, &page_query(page, extra)).await?;
+            let (items, total_pages) = split(body);
+            for item in items {
+                if seen.insert(dedupe_key(&item)) {
+                    out.push(item);
+                } else {
+                    tracing::warn!(path, page, "duplicate row across pages ignored");
+                }
+            }
             if page >= total_pages {
                 return Ok(out);
             }
+            if page >= MAX_DATA_PAGES {
+                return Err(SourceError::Contract(format!(
+                    "GET {path}: pagination exceeded {MAX_DATA_PAGES} pages \
+                     (server reports total_pages={total_pages})"
+                )));
+            }
             page += 1;
         }
+    }
+
+    async fn fetch_all_accounts(&self) -> Result<Vec<WireAccount>> {
+        self.fetch_paged(
+            "/api/v1/accounts",
+            &[],
+            |p: AccountsPage| (p.accounts, p.pagination.total_pages),
+            |a: &WireAccount| a.id.clone(),
+        )
+        .await
     }
 }
 
@@ -132,37 +178,42 @@ impl SureSource for ApiSureSource {
             Vec::new()
         };
 
-        let mut page = 1u32;
-        let mut out = Vec::new();
-        loop {
-            let body: TransactionsPage = self
-                .http
-                .get_json("/api/v1/transactions", &page_query(page, &extra))
-                .await?;
-            let total_pages = body.pagination.total_pages;
-            out.extend(body.transactions.into_iter().map(Transaction::from));
-            if page >= total_pages {
-                return Ok(out);
-            }
-            page += 1;
-        }
+        let wire_transactions = self
+            .fetch_paged(
+                "/api/v1/transactions",
+                &extra,
+                |p: TransactionsPage| (p.transactions, p.pagination.total_pages),
+                |t: &wire::WireTransaction| t.id.clone(),
+            )
+            .await?;
+
+        wire_transactions
+            .into_iter()
+            .map(|t| {
+                Transaction::try_from(t)
+                    .map_err(|e| SourceError::Contract(format!("GET /api/v1/transactions: {e}")))
+            })
+            .collect()
     }
 
     async fn holdings(&self) -> Result<Vec<Holding>> {
-        let mut page = 1u32;
-        let mut out = Vec::new();
-        loop {
-            let body: HoldingsPage = self
-                .http
-                .get_json("/api/v1/holdings", &page_query(page, &[]))
-                .await?;
-            let total_pages = body.pagination.total_pages;
-            out.extend(body.holdings.into_iter().map(Holding::from));
-            if page >= total_pages {
-                return Ok(out);
-            }
-            page += 1;
-        }
+        let wire_holdings = self
+            .fetch_paged(
+                "/api/v1/holdings",
+                &[],
+                |p: HoldingsPage| (p.holdings, p.pagination.total_pages),
+                |h: &wire::WireHolding| {
+                    (
+                        h.account.id.clone(),
+                        h.security
+                            .ticker
+                            .clone()
+                            .unwrap_or_else(|| h.security.name.clone()),
+                    )
+                },
+            )
+            .await?;
+        Ok(wire_holdings.into_iter().map(Holding::from).collect())
     }
 
     async fn health(&self) -> Result<UpstreamHealth> {

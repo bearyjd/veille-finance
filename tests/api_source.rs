@@ -185,3 +185,116 @@ async fn health_joins_accounts_with_syncs() {
         Utc.with_ymd_and_hms(2026, 8, 15, 6, 0, 5).single()
     );
 }
+
+#[tokio::test]
+async fn redirects_are_refused_and_leak_nothing() {
+    // A compromised upstream must not be able to bounce our API key to a
+    // third party: redirects are a contract violation, not something to follow.
+    let attacker = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&attacker)
+        .await;
+
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/accounts"))
+        .respond_with(
+            ResponseTemplate::new(302)
+                .insert_header("Location", format!("{}/collect", attacker.uri()).as_str()),
+        )
+        .mount(&upstream)
+        .await;
+
+    let err = source_for(&upstream)
+        .await
+        .accounts()
+        .await
+        .expect_err("redirect must fail");
+    assert!(
+        err.to_string().contains("302"),
+        "error should surface the redirect status: {err}"
+    );
+    assert!(
+        attacker.received_requests().await.expect("reqs").is_empty(),
+        "no request may follow the redirect"
+    );
+}
+
+#[tokio::test]
+async fn runaway_total_pages_hits_a_loud_cap() {
+    // A server that always claims more pages must produce an error, not an
+    // unbounded crawl.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/accounts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "accounts": [wire_account("a-1", "One", None)],
+            "pagination": { "page": 1, "per_page": 100, "total_count": 999999, "total_pages": 9999 }
+        })))
+        .mount(&server)
+        .await;
+
+    let err = source_for(&server)
+        .await
+        .accounts()
+        .await
+        .expect_err("must refuse runaway pagination");
+    assert!(
+        err.to_string().contains("page"),
+        "error should mention pagination: {err}"
+    );
+}
+
+#[tokio::test]
+async fn duplicate_rows_across_pages_are_deduped_by_id() {
+    // A server that ignores the page parameter would otherwise double every
+    // account snapshot in one run.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/accounts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "accounts": [wire_account("a-1", "One", None)],
+            "pagination": pagination(1, 2, 2)
+        })))
+        .mount(&server)
+        .await;
+
+    let accounts = source_for(&server)
+        .await
+        .accounts()
+        .await
+        .expect("accounts");
+    assert_eq!(
+        accounts.len(),
+        1,
+        "same id served twice must collapse to one"
+    );
+}
+
+#[tokio::test]
+async fn contradictory_sign_and_classification_is_a_contract_error() {
+    let server = MockServer::start().await;
+    let mut bad = wire_transaction("t-bad", "2026-08-01");
+    bad["classification"] = json!("expense");
+    bad["signed_amount_cents"] = json!(100); // positive, but claims expense
+    Mock::given(method("GET"))
+        .and(path("/api/v1/transactions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "transactions": [bad],
+            "pagination": pagination(1, 1, 1)
+        })))
+        .mount(&server)
+        .await;
+
+    let err = source_for(&server)
+        .await
+        .transactions(DateTime::<Utc>::MIN_UTC)
+        .await
+        .expect_err("inconsistent money data must not be stored");
+    assert!(
+        err.to_string().contains("classification"),
+        "error should name the inconsistency: {err}"
+    );
+}

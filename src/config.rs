@@ -29,6 +29,9 @@ pub struct Config {
 pub struct TenantConfig {
     pub slug: String,
     pub display_name: String,
+    /// Incremental sync window in days (default: [`crate::sync::DEFAULT_LOOKBACK_DAYS`]).
+    /// Upstream backfills older than this are only caught by a `--full` resync.
+    pub lookback_days: Option<u32>,
     pub upstream: UpstreamConfig,
 }
 

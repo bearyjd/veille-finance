@@ -48,12 +48,14 @@ impl SureSource for FixtureSureSource {
     async fn transactions(&self, since: DateTime<Utc>) -> Result<Vec<Transaction>> {
         let page: TransactionsPage = self.load("transactions.json").await?;
         let since_date = since.date_naive();
-        Ok(page
-            .transactions
+        page.transactions
             .into_iter()
             .filter(|t| t.date >= since_date)
-            .map(Transaction::from)
-            .collect())
+            .map(|t| {
+                Transaction::try_from(t)
+                    .map_err(|e| SourceError::Contract(format!("transactions.json: {e}")))
+            })
+            .collect()
     }
 
     async fn holdings(&self) -> Result<Vec<Holding>> {

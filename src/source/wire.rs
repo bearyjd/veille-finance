@@ -132,15 +132,53 @@ impl From<WireAccount> for Account {
     }
 }
 
-impl From<WireTransaction> for Transaction {
-    fn from(w: WireTransaction) -> Self {
+impl TryFrom<WireTransaction> for Transaction {
+    type Error = String;
+
+    /// Fails on internally inconsistent money data. Upstream contract drift
+    /// must be a loud error, never silently-stored wrong financial data.
+    fn try_from(w: WireTransaction) -> std::result::Result<Self, Self::Error> {
+        let signed_abs = w
+            .signed_amount_cents
+            .checked_abs()
+            .ok_or_else(|| format!("transaction {}: signed_amount_cents out of range", w.id))?;
+        if w.amount_cents < 0 {
+            return Err(format!(
+                "transaction {}: negative amount_cents {}",
+                w.id, w.amount_cents
+            ));
+        }
+        if signed_abs != w.amount_cents {
+            return Err(format!(
+                "transaction {}: |signed_amount_cents| {} != amount_cents {}",
+                w.id, signed_abs, w.amount_cents
+            ));
+        }
+        let sign_consistent = match w.classification.as_str() {
+            "income" => w.signed_amount_cents >= 0,
+            "expense" => w.signed_amount_cents <= 0,
+            other => {
+                return Err(format!(
+                    "transaction {}: unknown classification {other:?}",
+                    w.id
+                ));
+            }
+        };
+        if !sign_consistent {
+            return Err(format!(
+                "transaction {}: classification {:?} contradicts signed_amount_cents {}",
+                w.id, w.classification, w.signed_amount_cents
+            ));
+        }
+
         let counterparty_key = w
             .merchant
             .as_ref()
             .map(|m| normalize_counterparty(&m.name))
+            .filter(|k| !k.is_empty())
             .or_else(|| Some(normalize_counterparty(&w.name)))
             .filter(|k| !k.is_empty());
-        Transaction {
+        Ok(Transaction {
             external_id: w.id,
             account_external_id: w.account.id,
             posted_at: w.date,
@@ -151,7 +189,7 @@ impl From<WireTransaction> for Transaction {
             counterparty_key,
             is_transfer: w.transfer.is_some(),
             updated_at: w.updated_at,
-        }
+        })
     }
 }
 

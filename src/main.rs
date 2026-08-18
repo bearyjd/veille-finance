@@ -36,6 +36,9 @@ enum Command {
         /// Read from a fixture directory instead of the live upstream
         #[arg(long)]
         fixtures: Option<PathBuf>,
+        /// Ignore the incremental watermark and pull full history
+        #[arg(long)]
+        full: bool,
     },
 }
 
@@ -59,7 +62,11 @@ async fn run(cli: Cli) -> Result<(), String> {
     let config = Config::load(&cli.config).map_err(|e| e.to_string())?;
 
     match cli.command {
-        Command::Sync { tenant, fixtures } => sync_command(&config, tenant, fixtures).await,
+        Command::Sync {
+            tenant,
+            fixtures,
+            full,
+        } => sync_command(&config, tenant, fixtures, full).await,
     }
 }
 
@@ -67,6 +74,7 @@ async fn sync_command(
     config: &Config,
     only_tenant: Option<String>,
     fixtures: Option<PathBuf>,
+    full: bool,
 ) -> Result<(), String> {
     let store = Store::open(&config.store_path)
         .await
@@ -108,7 +116,13 @@ async fn sync_command(
             .await
             .map_err(|e| e.to_string())?;
 
-        match sync_tenant(&store, tenant, source.as_ref(), chrono::Utc::now()).await {
+        let options = veille::sync::SyncOptions {
+            lookback_days: tenant_config
+                .lookback_days
+                .unwrap_or(veille::sync::DEFAULT_LOOKBACK_DAYS),
+            full,
+        };
+        match sync_tenant(&store, tenant, source.as_ref(), chrono::Utc::now(), options).await {
             Ok(outcome) => {
                 println!(
                     "{}: {} account snapshots, {} new / {} refreshed transactions, {} holding snapshots",

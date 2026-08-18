@@ -1,18 +1,32 @@
 //! Tenant-scoped repositories. Every method takes a non-optional [`TenantId`]
 //! and every SQL statement filters on it.
+//!
+//! Writes for one sync run go through [`Store::materialize`], which commits
+//! everything in a single database transaction — a failed run leaves no
+//! partial state to duplicate on retry.
 
 use chrono::{DateTime, Utc};
+use sqlx::SqliteConnection;
 
 use super::{Result, Store, StoreError, TenantId};
 use crate::domain::{Account, Holding, Transaction};
 
 /// Row counts reported by an idempotent transaction upsert. `refreshed` are
-/// rows that already existed for `(tenant_id, external_id)` and had their
-/// mutable fields re-written from upstream.
+/// existing rows re-written from upstream; `skipped_stale` are incoming rows
+/// older (by `updated_at`) than what is already stored, which are ignored.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct UpsertStats {
     pub inserted: u64,
     pub refreshed: u64,
+    pub skipped_stale: u64,
+}
+
+/// Counts from one atomic materialization run.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct MaterializeStats {
+    pub account_snapshots: u64,
+    pub transactions: UpsertStats,
+    pub holding_snapshots: u64,
 }
 
 pub struct TenantRepo<'a> {
@@ -51,6 +65,28 @@ impl TenantRepo<'_> {
 }
 
 impl Store {
+    /// Materialize one sync run atomically: account snapshots, transaction
+    /// upserts, and holding snapshots commit together or not at all.
+    pub async fn materialize(
+        &self,
+        tenant: TenantId,
+        accounts: &[Account],
+        transactions: &[Transaction],
+        holdings: &[Holding],
+        now: DateTime<Utc>,
+    ) -> Result<MaterializeStats> {
+        let mut tx = self.pool().begin().await?;
+        let account_snapshots = insert_account_snapshots_on(&mut tx, tenant, accounts, now).await?;
+        let tx_stats = upsert_transactions_on(&mut tx, tenant, transactions, now).await?;
+        let holding_snapshots = insert_holding_snapshots_on(&mut tx, tenant, holdings, now).await?;
+        tx.commit().await?;
+        Ok(MaterializeStats {
+            account_snapshots,
+            transactions: tx_stats,
+            holding_snapshots,
+        })
+    }
+
     /// Append one snapshot row per account (append-only table).
     pub async fn insert_account_snapshots(
         &self,
@@ -58,93 +94,24 @@ impl Store {
         accounts: &[Account],
         as_of: DateTime<Utc>,
     ) -> Result<u64> {
-        let as_of = as_of.to_rfc3339();
         let mut tx = self.pool().begin().await?;
-        for a in accounts {
-            sqlx::query!(
-                "INSERT INTO account_snapshot \
-                 (tenant_id, external_id, name, institution, kind, status, balance_minor, currency, as_of) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                tenant.0,
-                a.external_id,
-                a.name,
-                a.institution,
-                a.kind,
-                a.status,
-                a.balance_minor,
-                a.currency,
-                as_of,
-            )
-            .execute(&mut *tx)
-            .await?;
-        }
+        let count = insert_account_snapshots_on(&mut tx, tenant, accounts, as_of).await?;
         tx.commit().await?;
-        Ok(accounts.len() as u64)
+        Ok(count)
     }
 
     /// Idempotent upsert on `(tenant_id, external_id)`. `first_seen_at` is set
     /// once on insert and never touched again; mutable fields are refreshed
-    /// from upstream on conflict.
+    /// from upstream on conflict, unless the incoming row is older (by
+    /// `updated_at`) than the stored one.
     pub async fn upsert_transactions(
         &self,
         tenant: TenantId,
         transactions: &[Transaction],
         now: DateTime<Utc>,
     ) -> Result<UpsertStats> {
-        let now = now.to_rfc3339();
-        let mut stats = UpsertStats::default();
         let mut tx = self.pool().begin().await?;
-        for t in transactions {
-            let posted_at = t.posted_at.to_string();
-            let is_transfer = i64::from(t.is_transfer);
-            let updated_at = t.updated_at.to_rfc3339();
-            let inserted = sqlx::query!(
-                "INSERT OR IGNORE INTO transactions \
-                 (tenant_id, external_id, account_external_id, posted_at, amount_minor, currency, \
-                  description, category, counterparty_key, is_transfer, first_seen_at, updated_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                tenant.0,
-                t.external_id,
-                t.account_external_id,
-                posted_at,
-                t.amount_minor,
-                t.currency,
-                t.description,
-                t.category,
-                t.counterparty_key,
-                is_transfer,
-                now,
-                updated_at,
-            )
-            .execute(&mut *tx)
-            .await?
-            .rows_affected();
-
-            if inserted == 1 {
-                stats.inserted += 1;
-            } else {
-                sqlx::query!(
-                    "UPDATE transactions SET \
-                     account_external_id = ?, posted_at = ?, amount_minor = ?, currency = ?, \
-                     description = ?, category = ?, counterparty_key = ?, is_transfer = ?, updated_at = ? \
-                     WHERE tenant_id = ? AND external_id = ?",
-                    t.account_external_id,
-                    posted_at,
-                    t.amount_minor,
-                    t.currency,
-                    t.description,
-                    t.category,
-                    t.counterparty_key,
-                    is_transfer,
-                    updated_at,
-                    tenant.0,
-                    t.external_id,
-                )
-                .execute(&mut *tx)
-                .await?;
-                stats.refreshed += 1;
-            }
-        }
+        let stats = upsert_transactions_on(&mut tx, tenant, transactions, now).await?;
         tx.commit().await?;
         Ok(stats)
     }
@@ -156,26 +123,10 @@ impl Store {
         holdings: &[Holding],
         as_of: DateTime<Utc>,
     ) -> Result<u64> {
-        let as_of = as_of.to_rfc3339();
         let mut tx = self.pool().begin().await?;
-        for h in holdings {
-            sqlx::query!(
-                "INSERT INTO holding_snapshot \
-                 (tenant_id, account_external_id, symbol, quantity, market_value_minor, currency, as_of) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?)",
-                tenant.0,
-                h.account_external_id,
-                h.symbol,
-                h.quantity,
-                h.market_value_minor,
-                h.currency,
-                as_of,
-            )
-            .execute(&mut *tx)
-            .await?;
-        }
+        let count = insert_holding_snapshots_on(&mut tx, tenant, holdings, as_of).await?;
         tx.commit().await?;
-        Ok(holdings.len() as u64)
+        Ok(count)
     }
 
     /// Newest posted date stored for this tenant, or `None` when empty.
@@ -252,6 +203,134 @@ impl Store {
         .await?;
         Ok(count as u64)
     }
+}
+
+async fn insert_account_snapshots_on(
+    conn: &mut SqliteConnection,
+    tenant: TenantId,
+    accounts: &[Account],
+    as_of: DateTime<Utc>,
+) -> Result<u64> {
+    let as_of = as_of.to_rfc3339();
+    for a in accounts {
+        sqlx::query!(
+            "INSERT INTO account_snapshot \
+             (tenant_id, external_id, name, institution, kind, status, balance_minor, currency, as_of) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            tenant.0,
+            a.external_id,
+            a.name,
+            a.institution,
+            a.kind,
+            a.status,
+            a.balance_minor,
+            a.currency,
+            as_of,
+        )
+        .execute(&mut *conn)
+        .await?;
+    }
+    Ok(accounts.len() as u64)
+}
+
+async fn upsert_transactions_on(
+    conn: &mut SqliteConnection,
+    tenant: TenantId,
+    transactions: &[Transaction],
+    now: DateTime<Utc>,
+) -> Result<UpsertStats> {
+    let now = now.to_rfc3339();
+    let mut stats = UpsertStats::default();
+    for t in transactions {
+        let posted_at = t.posted_at.to_string();
+        let is_transfer = i64::from(t.is_transfer);
+        let updated_at = t.updated_at.to_rfc3339();
+        let inserted = sqlx::query!(
+            "INSERT OR IGNORE INTO transactions \
+             (tenant_id, external_id, account_external_id, posted_at, amount_minor, currency, \
+              description, category, counterparty_key, is_transfer, first_seen_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            tenant.0,
+            t.external_id,
+            t.account_external_id,
+            posted_at,
+            t.amount_minor,
+            t.currency,
+            t.description,
+            t.category,
+            t.counterparty_key,
+            is_transfer,
+            now,
+            updated_at,
+        )
+        .execute(&mut *conn)
+        .await?
+        .rows_affected();
+
+        if inserted == 1 {
+            stats.inserted += 1;
+            continue;
+        }
+
+        // Refresh only when the incoming row is at least as new as the stored
+        // one — a stale duplicate (in-batch or from an older concurrent run)
+        // must never overwrite newer data. RFC 3339 UTC strings compare
+        // chronologically as text.
+        let refreshed = sqlx::query!(
+            "UPDATE transactions SET \
+             account_external_id = ?, posted_at = ?, amount_minor = ?, currency = ?, \
+             description = ?, category = ?, counterparty_key = ?, is_transfer = ?, updated_at = ? \
+             WHERE tenant_id = ? AND external_id = ? AND updated_at <= ?",
+            t.account_external_id,
+            posted_at,
+            t.amount_minor,
+            t.currency,
+            t.description,
+            t.category,
+            t.counterparty_key,
+            is_transfer,
+            updated_at,
+            tenant.0,
+            t.external_id,
+            updated_at,
+        )
+        .execute(&mut *conn)
+        .await?
+        .rows_affected();
+
+        if refreshed == 1 {
+            stats.refreshed += 1;
+        } else {
+            stats.skipped_stale += 1;
+        }
+    }
+    Ok(stats)
+}
+
+async fn insert_holding_snapshots_on(
+    conn: &mut SqliteConnection,
+    tenant: TenantId,
+    holdings: &[Holding],
+    as_of: DateTime<Utc>,
+) -> Result<u64> {
+    let as_of = as_of.to_rfc3339();
+    for h in holdings {
+        sqlx::query!(
+            "INSERT INTO holding_snapshot \
+             (tenant_id, account_external_id, symbol, quantity, market_value_minor, currency, as_of) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            tenant.0,
+            h.account_external_id,
+            h.symbol,
+            h.quantity,
+            h.market_value_minor,
+            h.currency,
+            as_of,
+        )
+        .execute(&mut *conn)
+        .await?;
+    }
+    Ok(holdings.len() as u64)
 }
 
 /// A stored value failed to parse back into its domain type — the database
