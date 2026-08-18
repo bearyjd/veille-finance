@@ -49,6 +49,56 @@ pub struct Holding {
     pub as_of_date: NaiveDate,
 }
 
+/// Severity is set by the rule that emitted the finding, and by nothing else
+/// (PRP §2.4): `Info` appears in the digest, `Warn` is highlighted there,
+/// `Alert` additionally triggers immediate push delivery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Severity {
+    Info,
+    Warn,
+    Alert,
+}
+
+impl Severity {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Severity::Info => "info",
+            Severity::Warn => "warn",
+            Severity::Alert => "alert",
+        }
+    }
+}
+
+impl std::str::FromStr for Severity {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "info" => Ok(Severity::Info),
+            "warn" => Ok(Severity::Warn),
+            "alert" => Ok(Severity::Alert),
+            other => Err(format!("unknown severity {other:?}")),
+        }
+    }
+}
+
+/// A condition detected by deterministic rule code. Only rules create these;
+/// nothing downstream may add, drop, or re-rank them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Finding {
+    pub rule_id: String,
+    pub severity: Severity,
+    /// Human-readable identity of what the finding is about
+    /// (e.g. `institution:First National`, `account:Chase Sapphire`).
+    pub subject: String,
+    /// Structured details; all money as integer minor units plus currency.
+    pub evidence: serde_json::Value,
+    /// Stable identity of the condition instance — the store is unique on
+    /// `(tenant_id, dedupe_key)`, so re-detecting the same condition never
+    /// re-alerts.
+    pub dedupe_key: String,
+    pub detected_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstitutionHealth {
     pub institution: String,

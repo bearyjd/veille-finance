@@ -60,6 +60,21 @@ impl Store {
         Ok(Self { pool })
     }
 
+    /// Ephemeral in-memory store for `--fixtures` evaluation runs: never
+    /// touches the configured store file, vanishes on exit. Single
+    /// connection — each SQLite `:memory:` connection is its own database.
+    pub async fn open_in_memory() -> Result<Self> {
+        let options = SqliteConnectOptions::new()
+            .filename(":memory:")
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await?;
+        sqlx::migrate!("./migrations").run(&pool).await?;
+        Ok(Self { pool })
+    }
+
     pub(crate) fn pool(&self) -> &SqlitePool {
         &self.pool
     }

@@ -82,7 +82,7 @@ pub async fn sync_tenant(
     let health = source.health().await?;
 
     let stats = store
-        .materialize(tenant, &accounts, &transactions, &holdings, now)
+        .materialize(tenant, &accounts, &transactions, &holdings, &health, now)
         .await?;
 
     tracing::info!(
