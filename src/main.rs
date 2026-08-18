@@ -146,6 +146,7 @@ async fn digest_command(
 
     let llm =
         veille::narrate::LlmConfig::resolve(config.llm.as_ref().and_then(|l| l.model.as_deref()));
+    let llm_client = veille::narrate::LlmConfig::client();
 
     let mut failures = Vec::new();
     for tenant_config in selected {
@@ -171,8 +172,8 @@ async fn digest_command(
             )
             .await
             .map_err(|e| e.to_string())?;
-            if let Some(llm) = &llm {
-                input.narration = veille::narrate::narrate(llm, &input).await;
+            if let (Some(llm), Some(client)) = (&llm, &llm_client) {
+                input.narration = veille::narrate::narrate(client, llm, &input).await;
             }
             if html {
                 veille::digest::render_html(&input).map_err(|e| e.to_string())
@@ -218,12 +219,7 @@ async fn evaluate_command(
     as_of: Option<String>,
     dry_run: bool,
 ) -> Result<(), String> {
-    let now = match as_of {
-        Some(raw) => chrono::DateTime::parse_from_rfc3339(&raw)
-            .map_err(|e| format!("--as-of must be RFC 3339 (e.g. 2026-08-20T22:00:00Z): {e}"))?
-            .with_timezone(&chrono::Utc),
-        None => chrono::Utc::now(),
-    };
+    let now = parse_as_of(as_of)?;
     if fixtures.is_some() && only_tenant.is_none() && config.tenants.len() > 1 {
         return Err("--fixtures requires --tenant when more than one tenant is configured".into());
     }

@@ -46,6 +46,8 @@ pub struct EvalContext {
     pub balances: BTreeMap<String, Vec<BalancePoint>>,
     /// Account display names keyed by external id (latest snapshot wins).
     pub account_names: BTreeMap<String, String>,
+    /// Account currencies keyed by external id (latest snapshot wins).
+    pub account_currencies: BTreeMap<String, String>,
 }
 
 pub trait Rule: Send + Sync {
@@ -72,6 +74,16 @@ impl EvalContext {
             .get(external_id)
             .map(String::as_str)
             .unwrap_or(external_id)
+    }
+
+    /// Display currency for an account; "USD" only as a display fallback for
+    /// accounts that have never had a snapshot (cannot happen for balances
+    /// the balance-band rule sees, which come from snapshots).
+    pub fn account_currency(&self, external_id: &str) -> &str {
+        self.account_currencies
+            .get(external_id)
+            .map(String::as_str)
+            .unwrap_or("USD")
     }
 }
 
@@ -152,10 +164,8 @@ pub async fn build_context(
 
     let mut balances: BTreeMap<String, Vec<BalancePoint>> = BTreeMap::new();
     let mut account_names: BTreeMap<String, String> = BTreeMap::new();
-    for row in store.account_snapshot_rows(tenant).await? {
-        if row.as_of_date > as_of_date {
-            continue;
-        }
+    let mut account_currencies: BTreeMap<String, String> = BTreeMap::new();
+    for row in store.account_snapshot_rows(tenant, now).await? {
         let series = balances.entry(row.external_id.clone()).or_default();
         match series.last_mut() {
             // Several syncs in one day: the last observation of the day wins.
@@ -165,6 +175,7 @@ pub async fn build_context(
                 balance_minor: row.balance_minor,
             }),
         }
+        account_currencies.insert(row.external_id.clone(), row.currency);
         account_names.insert(row.external_id, row.name);
     }
 
@@ -175,6 +186,7 @@ pub async fn build_context(
         transactions,
         balances,
         account_names,
+        account_currencies,
     })
 }
 
@@ -201,6 +213,7 @@ pub(crate) mod test_support {
             transactions: Vec::new(),
             balances: Default::default(),
             account_names: Default::default(),
+            account_currencies: Default::default(),
         }
     }
 

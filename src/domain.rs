@@ -90,6 +90,9 @@ pub struct Finding {
     /// Human-readable identity of what the finding is about
     /// (e.g. `institution:First National`, `account:Chase Sapphire`).
     pub subject: String,
+    /// One plain sentence a person reads in the digest. Written by the rule —
+    /// the deterministic rendering is the product, not the LLM prose.
+    pub summary: String,
     /// Structured details; all money as integer minor units plus currency.
     pub evidence: serde_json::Value,
     /// Stable identity of the condition instance — the store is unique on

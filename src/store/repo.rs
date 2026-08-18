@@ -27,8 +27,12 @@ pub struct StoredFinding {
     pub rule_id: String,
     pub severity: crate::domain::Severity,
     pub subject: String,
+    pub summary: String,
     pub evidence: serde_json::Value,
     pub detected_at: DateTime<Utc>,
+    /// Refreshed each time the same condition is re-detected; drives the
+    /// digest's "active during the period" selection.
+    pub last_seen_at: DateTime<Utc>,
     pub dedupe_key: String,
 }
 
@@ -161,7 +165,9 @@ impl Store {
     }
 
     /// Insert findings, ignoring any whose `(tenant_id, dedupe_key)` already
-    /// exists — the same condition never re-alerts. Returns how many were new.
+    /// exists — the same condition never re-alerts. Re-detection refreshes
+    /// `last_seen_at` (forward only), which keeps an ongoing condition
+    /// visible in every digest until it clears. Returns how many were new.
     pub async fn upsert_findings(
         &self,
         tenant: TenantId,
@@ -175,28 +181,46 @@ impl Store {
             let detected_at = f.detected_at.to_rfc3339();
             let inserted = sqlx::query!(
                 "INSERT OR IGNORE INTO finding \
-                 (tenant_id, rule_id, severity, subject, evidence, detected_at, dedupe_key) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                 (tenant_id, rule_id, severity, subject, summary, evidence, detected_at, \
+                  last_seen_at, dedupe_key) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 tenant.0,
                 f.rule_id,
                 severity,
                 f.subject,
+                f.summary,
                 evidence,
+                detected_at,
                 detected_at,
                 f.dedupe_key,
             )
             .execute(&mut *tx)
             .await?
             .rows_affected();
-            new_rows += inserted;
+            if inserted == 1 {
+                new_rows += 1;
+            } else {
+                sqlx::query!(
+                    "UPDATE finding SET last_seen_at = ? \
+                     WHERE tenant_id = ? AND dedupe_key = ? AND last_seen_at < ?",
+                    detected_at,
+                    tenant.0,
+                    f.dedupe_key,
+                    detected_at,
+                )
+                .execute(&mut *tx)
+                .await?;
+            }
         }
         tx.commit().await?;
         Ok(new_rows)
     }
 
-    /// Findings detected in `[since, until]`, ordered for stable display:
-    /// most severe first, then rule id, then dedupe key.
-    pub async fn findings_between(
+    /// Findings ACTIVE in `[since, until]` — detected by `until` and still
+    /// being re-detected at or after `since` — excluding acknowledged ones.
+    /// An unresolved condition therefore appears in every digest until it
+    /// clears. Ordered most severe first, then rule id, then dedupe key.
+    pub async fn findings_active_in(
         &self,
         tenant: TenantId,
         since: DateTime<Utc>,
@@ -205,9 +229,11 @@ impl Store {
         let since = since.to_rfc3339();
         let until = until.to_rfc3339();
         let rows = sqlx::query!(
-            "SELECT rule_id, severity, subject, evidence, detected_at, dedupe_key \
+            "SELECT rule_id, severity, subject, summary, evidence, detected_at, \
+             last_seen_at, dedupe_key \
              FROM finding \
-             WHERE tenant_id = ? AND detected_at >= ? AND detected_at <= ? \
+             WHERE tenant_id = ? AND last_seen_at >= ? AND detected_at <= ? \
+             AND acknowledged_at IS NULL \
              ORDER BY detected_at, dedupe_key",
             tenant.0,
             since,
@@ -226,10 +252,14 @@ impl Store {
                         .parse()
                         .map_err(|e: String| corrupt("finding.severity", &e))?,
                     subject: r.subject,
+                    summary: r.summary,
                     evidence: serde_json::from_str(&r.evidence)
                         .map_err(|e| corrupt("finding.evidence", &e))?,
                     detected_at: DateTime::parse_from_rfc3339(&r.detected_at)
                         .map_err(|e| corrupt("finding.detected_at", &e))?
+                        .with_timezone(&Utc),
+                    last_seen_at: DateTime::parse_from_rfc3339(&r.last_seen_at)
+                        .map_err(|e| corrupt("finding.last_seen_at", &e))?
                         .with_timezone(&Utc),
                     dedupe_key: r.dedupe_key,
                 })
@@ -265,12 +295,21 @@ impl Store {
         Ok(count as u64)
     }
 
-    /// All account snapshot observations, ascending by observation time.
-    pub async fn account_snapshot_rows(&self, tenant: TenantId) -> Result<Vec<AccountSnapshotRow>> {
+    /// Account snapshot observations up to `up_to`, ascending by observation
+    /// time. The bound is pushed into SQL: the table is append-only and grows
+    /// forever, so callers must not scan past their evaluation instant.
+    pub async fn account_snapshot_rows(
+        &self,
+        tenant: TenantId,
+        up_to: DateTime<Utc>,
+    ) -> Result<Vec<AccountSnapshotRow>> {
+        let up_to = up_to.to_rfc3339();
         let rows = sqlx::query!(
             "SELECT external_id, name, balance_minor, currency, as_of \
-             FROM account_snapshot WHERE tenant_id = ? ORDER BY as_of, external_id, id",
-            tenant.0
+             FROM account_snapshot WHERE tenant_id = ? AND as_of <= ? \
+             ORDER BY as_of, external_id, id",
+            tenant.0,
+            up_to,
         )
         .fetch_all(self.pool())
         .await?;

@@ -28,10 +28,13 @@ pub enum DigestError {
 pub struct AccountDelta {
     pub account: String,
     /// Balance at (or before) the period start; `None` when the account has
-    /// no observation that old.
+    /// no observation that old, or none within the period.
     pub start_minor: Option<i64>,
     pub end_minor: i64,
     pub currency: String,
+    /// Date of the newest observation; before `period_start` means the
+    /// balance shown is stale.
+    pub last_observed: NaiveDate,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -62,44 +65,81 @@ pub async fn build_digest_input(
         .map(|dt| dt.and_utc())
         .unwrap_or(DateTime::<Utc>::MIN_UTC);
 
-    let findings = store.findings_between(tenant, since, as_of).await?;
+    let findings = store.findings_active_in(tenant, since, as_of).await?;
 
-    // Latest observation per account up to period_end, and the last
-    // observation at or before period_start for the delta.
+    // Latest observation per account up to as_of, and the last observation
+    // at or before period_start for the delta.
     struct Series {
+        external_id: String,
         name: String,
         currency: String,
         start_minor: Option<i64>,
         end_minor: i64,
+        last_observed: NaiveDate,
     }
     let mut per_account: BTreeMap<String, Series> = BTreeMap::new();
-    for row in store.account_snapshot_rows(tenant).await? {
-        if row.as_of_date > period_end {
-            continue;
-        }
+    for row in store.account_snapshot_rows(tenant, as_of).await? {
         let entry = per_account
             .entry(row.external_id.clone())
             .or_insert(Series {
+                external_id: row.external_id.clone(),
                 name: row.name.clone(),
                 currency: row.currency.clone(),
                 start_minor: None,
                 end_minor: row.balance_minor,
+                last_observed: row.as_of_date,
             });
         // Rows arrive ascending, so the last write per bucket wins.
         entry.name = row.name;
         entry.currency = row.currency;
         entry.end_minor = row.balance_minor;
+        entry.last_observed = row.as_of_date;
         if row.as_of_date <= period_start {
             entry.start_minor = Some(row.balance_minor);
         }
     }
+
+    // Two accounts can share a display name; disambiguate so the digest never
+    // shows two indistinguishable rows.
+    let mut name_counts: BTreeMap<&str, u32> = BTreeMap::new();
+    for series in per_account.values() {
+        *name_counts.entry(series.name.as_str()).or_default() += 1;
+    }
+    let ambiguous: std::collections::BTreeSet<String> = name_counts
+        .into_iter()
+        .filter(|(_, n)| *n > 1)
+        .map(|(name, _)| name.to_string())
+        .collect();
+
     let mut deltas: Vec<AccountDelta> = per_account
         .into_values()
-        .map(|s| AccountDelta {
-            account: s.name,
-            start_minor: s.start_minor,
-            end_minor: s.end_minor,
-            currency: s.currency,
+        .map(|s| {
+            let account = if ambiguous.contains(&s.name) {
+                let tail: String = s
+                    .external_id
+                    .chars()
+                    .rev()
+                    .take(4)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                format!("{} (\u{2026}{tail})", s.name)
+            } else {
+                s.name
+            };
+            AccountDelta {
+                account,
+                // A single stale observation is "no data", not "no change":
+                // only report a delta when the account was actually observed
+                // during the period.
+                start_minor: (s.last_observed > period_start)
+                    .then_some(s.start_minor)
+                    .flatten(),
+                end_minor: s.end_minor,
+                currency: s.currency,
+                last_observed: s.last_observed,
+            }
         })
         .collect();
     deltas.sort_by(|a, b| a.account.cmp(&b.account));
@@ -122,6 +162,7 @@ fn template_context(input: &DigestInput) -> minijinja::Value {
             json!({
                 "severity": f.severity.as_str().to_uppercase(),
                 "rule_id": f.rule_id,
+                "summary": f.summary,
                 "subject": f.subject,
                 "evidence": f.evidence.to_string(),
             })
@@ -140,18 +181,29 @@ fn template_context(input: &DigestInput) -> minijinja::Value {
                     formatted
                 }
             });
+            let stale_since =
+                (d.last_observed < input.period_start).then(|| d.last_observed.to_string());
             json!({
                 "account": d.account,
                 "end": format_minor(d.end_minor, &d.currency),
                 "change": change,
+                "stale_since": stale_since,
             })
         })
         .collect();
+    // Narration paragraphs are rendered individually so the HTML template
+    // can wrap each in its own escaped <p>.
+    let narration_paragraphs: Option<Vec<String>> = input.narration.as_ref().map(|n| {
+        n.split("\n\n")
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .collect()
+    });
     minijinja::Value::from_serialize(json!({
         "tenant": input.tenant_display_name,
         "period_start": input.period_start.to_string(),
         "period_end": input.period_end.to_string(),
-        "narration": input.narration,
+        "narration_paragraphs": narration_paragraphs,
         "findings": findings,
         "deltas": deltas,
     }))

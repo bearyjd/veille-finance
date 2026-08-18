@@ -21,8 +21,13 @@ fn digest_input() -> DigestInput {
             rule_id: "sync-stale".into(),
             severity: veille::domain::Severity::Alert,
             subject: "institution:First National".into(),
+            summary: "No successful sync from First National in 5 days (threshold 4).".into(),
             evidence: json!({ "days_stale": 5 }),
             detected_at: Utc
+                .with_ymd_and_hms(2026, 8, 20, 22, 0, 0)
+                .single()
+                .expect("ts"),
+            last_seen_at: Utc
                 .with_ymd_and_hms(2026, 8, 20, 22, 0, 0)
                 .single()
                 .expect("ts"),
@@ -54,7 +59,12 @@ async fn request_is_well_formed_and_prose_comes_back() {
         .mount(&server)
         .await;
 
-    let narration = narrate(&config_for(&server), &digest_input()).await;
+    let narration = narrate(
+        &reqwest::Client::new(),
+        &config_for(&server),
+        &digest_input(),
+    )
+    .await;
     assert_eq!(narration.as_deref(), Some("One alert this week."));
 
     let requests = server.received_requests().await.expect("requests");
@@ -83,7 +93,15 @@ async fn server_error_yields_none() {
         .respond_with(ResponseTemplate::new(500))
         .mount(&server)
         .await;
-    assert_eq!(narrate(&config_for(&server), &digest_input()).await, None);
+    assert_eq!(
+        narrate(
+            &reqwest::Client::new(),
+            &config_for(&server),
+            &digest_input()
+        )
+        .await,
+        None
+    );
 }
 
 #[tokio::test]
@@ -93,7 +111,10 @@ async fn unreachable_endpoint_yields_none() {
         api_key: "k".into(),
         model: "m".into(),
     };
-    assert_eq!(narrate(&config, &digest_input()).await, None);
+    assert_eq!(
+        narrate(&reqwest::Client::new(), &config, &digest_input()).await,
+        None
+    );
 }
 
 #[tokio::test]
@@ -104,7 +125,15 @@ async fn malformed_response_yields_none() {
         .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
         .mount(&server)
         .await;
-    assert_eq!(narrate(&config_for(&server), &digest_input()).await, None);
+    assert_eq!(
+        narrate(
+            &reqwest::Client::new(),
+            &config_for(&server),
+            &digest_input()
+        )
+        .await,
+        None
+    );
 }
 
 #[test]
@@ -146,5 +175,68 @@ fn config_resolution_requires_every_piece() {
     assert!(
         LlmConfig::resolve_from(|_| None, Some("m")).is_none(),
         "no base url"
+    );
+}
+
+#[tokio::test]
+async fn oversized_response_yields_none() {
+    let server = MockServer::start().await;
+    let huge = "x".repeat(2_000_000);
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{ "message": { "role": "assistant", "content": huge } }]
+        })))
+        .mount(&server)
+        .await;
+    assert_eq!(
+        narrate(
+            &reqwest::Client::new(),
+            &config_for(&server),
+            &digest_input()
+        )
+        .await,
+        None,
+        "an endpoint streaming megabytes is broken or hostile; refuse it"
+    );
+}
+
+#[tokio::test]
+async fn truncated_generation_yields_none() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{
+                "message": { "role": "assistant", "content": "This summary was cut off mid-" },
+                "finish_reason": "length"
+            }]
+        })))
+        .mount(&server)
+        .await;
+    assert_eq!(
+        narrate(
+            &reqwest::Client::new(),
+            &config_for(&server),
+            &digest_input()
+        )
+        .await,
+        None,
+        "a truncated narration must not ship"
+    );
+}
+
+#[test]
+fn base_url_with_credentials_is_refused() {
+    let lookup = |key: &str| -> Option<String> {
+        match key {
+            "VEILLE_LLM_BASE_URL" => Some("https://user:secret@llm.example/v1".into()),
+            "VEILLE_LLM_API_KEY" => Some("k".into()),
+            _ => None,
+        }
+    };
+    assert!(
+        LlmConfig::resolve_from(lookup, Some("m")).is_none(),
+        "userinfo in the base URL would leak into error logs; refuse it"
     );
 }

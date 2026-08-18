@@ -187,3 +187,40 @@ api_key_env = "K"
         "error should mention the allowed schemes: {err}"
     );
 }
+
+#[test]
+fn rejects_absurd_digest_periods() {
+    let f = write_config(
+        r#"
+store_path = "/tmp/v.sqlite3"
+[[tenants]]
+slug = "jd"
+display_name = "Self"
+digest_period_days = 0
+[tenants.upstream]
+base_url = "http://a:3000"
+api_key_env = "K"
+"#,
+    );
+    assert!(
+        Config::load(f.path()).is_err(),
+        "0-day digest period must fail"
+    );
+
+    let f = write_config(
+        r#"
+store_path = "/tmp/v.sqlite3"
+[[tenants]]
+slug = "jd"
+display_name = "Self"
+digest_period_days = 4294967295
+[tenants.upstream]
+base_url = "http://a:3000"
+api_key_env = "K"
+"#,
+    );
+    assert!(
+        Config::load(f.path()).is_err(),
+        "u32::MAX digest period must fail"
+    );
+}

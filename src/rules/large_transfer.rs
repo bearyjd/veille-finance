@@ -29,6 +29,13 @@ impl Rule for LargeTransfer {
                 rule_id: self.id().to_string(),
                 severity: Severity::Alert,
                 subject: format!("account:{}", ctx.account_name(&t.account_external_id)),
+                summary: format!(
+                    "Large transaction: {} \u{2018}{}\u{2019} on {} ({}).",
+                    crate::domain::format_minor(t.amount_minor, &t.currency),
+                    t.description,
+                    t.posted_at,
+                    ctx.account_name(&t.account_external_id),
+                ),
                 evidence: json!({
                     "amount_minor": t.amount_minor,
                     "currency": t.currency,

@@ -73,10 +73,9 @@ async fn digest_renders_without_any_llm() {
     let text = render_text(&input).expect("text renders");
     assert!(text.contains("Alpha Household"));
     assert!(
-        text.contains("sync-stale"),
-        "findings must be listed: {text}"
+        text.contains("No successful sync from First National"),
+        "findings must be listed as human sentences: {text}"
     );
-    assert!(text.contains("First National"));
     assert!(
         text.contains("ALERT") || text.contains("alert"),
         "severity must be visible: {text}"
@@ -140,6 +139,7 @@ async fn html_escapes_hostile_finding_content() {
         rule_id: "large-transfer".into(),
         severity: veille::domain::Severity::Alert,
         subject: "account:<script>alert(1)</script>".into(),
+        summary: "Hostile <b>summary</b> content.".into(),
         evidence: serde_json::json!({ "description": "<img src=x onerror=alert(1)>" }),
         dedupe_key: "large-transfer:hostile".into(),
         detected_at: Utc
@@ -165,7 +165,147 @@ async fn html_escapes_hostile_finding_content() {
         "no unescaped tag from finding content may survive into HTML"
     );
     assert!(
-        html.contains("&lt;script&gt;"),
-        "the hostile content should be present but escaped"
+        html.contains("&lt;b&gt;") || html.contains("&lt;img"),
+        "the hostile content should be present but escaped: {html}"
+    );
+}
+
+#[tokio::test]
+async fn an_ongoing_alert_stays_in_every_digest_until_it_clears() {
+    let (_dir, store, tenant) = store_with_findings().await;
+
+    // A week later the outage persists: evaluate re-detects the same episode
+    // (same dedupe key — no new row, but the condition is still active).
+    let later = Utc
+        .with_ymd_and_hms(2026, 8, 27, 22, 0, 0)
+        .single()
+        .expect("ts");
+    evaluate_tenant(&store, tenant, RuleThresholds::default(), later, true)
+        .await
+        .expect("re-evaluate");
+
+    // The Aug 27 digest window (Aug 20–27) contains no NEW detection, but the
+    // outage is ongoing and must be shown.
+    let input = build_digest_input(&store, tenant, "Alpha Household", 7, later)
+        .await
+        .expect("digest input");
+    let text = render_text(&input).expect("render");
+    assert!(
+        text.contains("First National"),
+        "an unresolved alert must not vanish from later digests: {text}"
+    );
+}
+
+#[tokio::test]
+async fn digest_text_is_human_readable_not_json() {
+    let (_dir, store, tenant) = store_with_findings().await;
+    let as_of = Utc
+        .with_ymd_and_hms(2026, 8, 20, 22, 0, 0)
+        .single()
+        .expect("ts");
+    let input = build_digest_input(&store, tenant, "Alpha Household", 7, as_of)
+        .await
+        .expect("input");
+    let text = render_text(&input).expect("render");
+    assert!(
+        text.contains("No successful sync from First National"),
+        "each finding needs a human sentence: {text}"
+    );
+    assert!(
+        !text.contains("{\""),
+        "raw JSON is not a digest for humans: {text}"
+    );
+}
+
+#[tokio::test]
+async fn hostile_narration_is_escaped_in_html() {
+    let (_dir, store, tenant) = store_with_findings().await;
+    let as_of = Utc
+        .with_ymd_and_hms(2026, 8, 20, 22, 0, 0)
+        .single()
+        .expect("ts");
+    let mut input = build_digest_input(&store, tenant, "Alpha Household", 7, as_of)
+        .await
+        .expect("input");
+    input.narration = Some("All fine.<script>alert(1)</script>\n\nSecond paragraph.".into());
+    let html = render_html(&input).expect("html");
+    assert!(
+        !html.contains("<script>"),
+        "narration is untrusted model output and must be escaped: {html}"
+    );
+    assert!(html.contains("&lt;script&gt;"), "escaped, not dropped");
+}
+
+#[tokio::test]
+async fn narration_sits_below_the_findings_and_is_labeled() {
+    let (_dir, store, tenant) = store_with_findings().await;
+    let as_of = Utc
+        .with_ymd_and_hms(2026, 8, 20, 22, 0, 0)
+        .single()
+        .expect("ts");
+    let mut input = build_digest_input(&store, tenant, "Alpha Household", 7, as_of)
+        .await
+        .expect("input");
+    input.narration = Some("A quiet week overall.".into());
+    let text = render_text(&input).expect("render");
+    let findings_at = text.find("Findings").expect("findings section");
+    let narration_at = text
+        .find("A quiet week overall.")
+        .expect("narration present");
+    assert!(
+        narration_at > findings_at,
+        "prose is garnish: the deterministic findings come first: {text}"
+    );
+    assert!(
+        text.contains("Automated summary"),
+        "machine-generated prose must be labeled as such: {text}"
+    );
+}
+
+#[tokio::test]
+async fn an_account_with_no_data_in_the_period_is_marked_stale_not_unchanged() {
+    let dir = TempDir::new().expect("tempdir");
+    let store = Store::open(&dir.path().join("t.sqlite3"))
+        .await
+        .expect("store");
+    let tenant = store.tenants().ensure("a", "A").await.expect("tenant");
+
+    // One observation, long before the digest period.
+    let old = Utc
+        .with_ymd_and_hms(2026, 6, 1, 22, 0, 0)
+        .single()
+        .expect("ts");
+    store
+        .insert_account_snapshots(
+            tenant,
+            &[veille::domain::Account {
+                external_id: "acct-old".into(),
+                name: "Dormant Savings".into(),
+                institution: None,
+                kind: "depository".into(),
+                status: "active".into(),
+                balance_minor: 100_000,
+                currency: "USD".into(),
+            }],
+            old,
+        )
+        .await
+        .expect("snapshot");
+
+    let as_of = Utc
+        .with_ymd_and_hms(2026, 8, 20, 22, 0, 0)
+        .single()
+        .expect("ts");
+    let input = build_digest_input(&store, tenant, "A", 7, as_of)
+        .await
+        .expect("input");
+    let text = render_text(&input).expect("render");
+    assert!(
+        !text.contains("+$0.00"),
+        "one stale observation is 'no data', not 'no change': {text}"
+    );
+    assert!(
+        text.contains("2026-06-01"),
+        "the last-observed date must be visible for a stale account: {text}"
     );
 }

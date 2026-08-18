@@ -77,6 +77,16 @@ impl Rule for BalanceBand {
                 rule_id: self.id().to_string(),
                 severity,
                 subject: format!("account:{}", ctx.account_name(account_id)),
+                summary: format!(
+                    "{} balance {} is {} its typical range (about {}).",
+                    ctx.account_name(account_id),
+                    crate::domain::format_minor(
+                        latest.balance_minor,
+                        ctx.account_currency(account_id)
+                    ),
+                    direction,
+                    crate::domain::format_minor(clamp_i64(mean), ctx.account_currency(account_id)),
+                ),
                 evidence: json!({
                     "account_external_id": account_id,
                     "balance_minor": latest.balance_minor,
@@ -87,7 +97,7 @@ impl Rule for BalanceBand {
                     "window_days": ctx.thresholds.balance_band_window_days,
                     "baseline_points": baseline.len(),
                 }),
-                dedupe_key: format!("balance-band:{account_id}:{}:{direction}", latest.date),
+                dedupe_key: format!("balance-band:{account_id}:{direction}"),
                 detected_at: ctx.now,
             });
         }
@@ -148,7 +158,7 @@ mod tests {
         let findings = BalanceBand.evaluate(&ctx_with_series(big));
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].severity, Severity::Warn);
-        assert_eq!(findings[0].dedupe_key, "balance-band:a1:2026-08-17:above");
+        assert_eq!(findings[0].dedupe_key, "balance-band:a1:above");
         assert_eq!(findings[0].evidence["band_minor"], 10_000);
 
         let mut moderate = flat_history();
@@ -168,7 +178,7 @@ mod tests {
         points.push(("2026-08-17", 20_000));
         let findings = BalanceBand.evaluate(&ctx_with_series(points));
         assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].dedupe_key, "balance-band:a1:2026-08-17:below");
+        assert_eq!(findings[0].dedupe_key, "balance-band:a1:below");
     }
 
     #[test]

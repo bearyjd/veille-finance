@@ -37,10 +37,21 @@ impl Rule for SyncStale {
                     .last_successful_sync_at
                     .map(|last| last.to_rfc3339())
                     .unwrap_or_else(|| "never".to_string());
+                let summary = match days_stale {
+                    Some(days) => format!(
+                        "No successful sync from {} in {} days (threshold {}).",
+                        institution.institution, days, threshold_days
+                    ),
+                    None => format!(
+                        "No successful sync from {} has ever been observed.",
+                        institution.institution
+                    ),
+                };
                 Some(Finding {
                     rule_id: self.id().to_string(),
                     severity: Severity::Alert,
                     subject: format!("institution:{}", institution.institution),
+                    summary,
                     evidence: json!({
                         "institution": institution.institution,
                         "last_successful_sync_at": institution
@@ -77,6 +88,7 @@ mod tests {
             transactions: Vec::new(),
             balances: Default::default(),
             account_names: Default::default(),
+            account_currencies: Default::default(),
         }
     }
 

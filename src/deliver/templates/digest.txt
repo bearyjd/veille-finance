@@ -1,18 +1,28 @@
 {{ tenant }} — financial watch digest
 Period: {{ period_start }} to {{ period_end }}
-{% if narration %}
-{{ narration }}
-{% endif %}
-{% if findings %}
+
+{% if findings -%}
 Findings ({{ findings|length }}):
 {% for f in findings %}
-[{{ f.severity }}] {{ f.rule_id }} — {{ f.subject }}
-    {{ f.evidence }}
-{% endfor %}
-{% else %}
+[{{ f.severity }}] {{ f.summary }}
+{%- endfor %}
+{% else -%}
 No findings this period.
 {% endif %}
+{%- if narration_paragraphs %}
+Automated summary (the findings above are authoritative):
+{% for p in narration_paragraphs %}
+{{ p }}
+{%- endfor %}
+{% endif %}
+{% if deltas -%}
 Accounts as of {{ period_end }}:
 {% for d in deltas %}
-- {{ d.account }}: {{ d.end }}{% if d.change %} ({{ d.change }} since {{ period_start }}){% endif %}
-{% endfor %}
+- {{ d.account }}: {{ d.end }}
+  {%- if d.change %} ({{ d.change }} since {{ period_start }})
+  {%- elif d.stale_since %} (no data since {{ d.stale_since }})
+  {%- endif %}
+{%- endfor %}
+{% else -%}
+No account data yet.
+{% endif -%}

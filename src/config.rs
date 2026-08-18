@@ -152,6 +152,14 @@ impl Config {
                     tenant.slug, tenant.upstream.api_key_env
                 )));
             }
+            if let Some(days) = tenant.digest_period_days
+                && !(1..=366).contains(&days)
+            {
+                return Err(invalid(format!(
+                    "tenant {:?}: digest_period_days {days} must be between 1 and 366",
+                    tenant.slug
+                )));
+            }
             let base_url = tenant.upstream.base_url.trim();
             if !(base_url.starts_with("http://") || base_url.starts_with("https://")) {
                 return Err(invalid(format!(

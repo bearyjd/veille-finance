@@ -6,6 +6,8 @@ store_path = "/var/lib/veille/veille.sqlite3"
 
 # Optional LLM narration (PRP §8). The endpoint and key come from the
 # environment: VEILLE_LLM_BASE_URL, VEILLE_LLM_API_KEY (never in this file).
+# Use an https:// endpoint (or a local proxy such as Pipelock) — a plain
+# http:// URL sends the bearer token in cleartext.
 # Narration is off unless all three pieces are present, and the digest never
 # depends on it. VEILLE_LLM_MODEL overrides the model set here.
 # [llm]
