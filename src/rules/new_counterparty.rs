@@ -22,12 +22,9 @@ impl Rule for NewCounterparty {
         let cutoff = ctx.now.date_naive() - chrono::Duration::days(RECENT_TRANSACTION_WINDOW_DAYS);
 
         // First-ever occurrence per counterparty, over the FULL history —
-        // "new" means new to the whole record, not new to the window.
+        // transfers included: "new" means new to the whole record.
         let mut first_seen: BTreeMap<&str, &Transaction> = BTreeMap::new();
         for t in &ctx.transactions {
-            if t.is_transfer {
-                continue;
-            }
             let Some(key) = t.counterparty_key.as_deref() else {
                 continue;
             };
@@ -36,6 +33,9 @@ impl Rule for NewCounterparty {
 
         first_seen
             .into_iter()
+            // A first appearance that is itself an internal transfer is
+            // routine movement, not a new payee.
+            .filter(|(_, t)| !t.is_transfer)
             .filter(|(_, t)| t.posted_at >= cutoff)
             .filter(|(_, t)| t.amount_minor.unsigned_abs() >= floor)
             .map(|(key, t)| Finding {
@@ -116,5 +116,18 @@ mod tests {
         let mut ctx = ctx_with_transactions(vec![txn("t1", "a1", "2026-08-10", -60_000, "Vendor")]);
         ctx.thresholds.new_counterparty_floor_minor = 100_000;
         assert!(NewCounterparty.evaluate(&ctx).is_empty());
+    }
+    #[test]
+    fn a_counterparty_first_seen_via_transfer_is_not_new_later() {
+        let mut old_transfer = txn("t0", "a1", "2026-01-10", -80_000, "Vendor Co");
+        old_transfer.is_transfer = true;
+        let ctx = ctx_with_transactions(vec![
+            old_transfer,
+            txn("t1", "a1", "2026-08-10", -90_000, "Vendor Co"),
+        ]);
+        assert!(
+            NewCounterparty.evaluate(&ctx).is_empty(),
+            "first-ever means first in the FULL history, transfers included"
+        );
     }
 }

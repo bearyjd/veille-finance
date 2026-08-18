@@ -206,7 +206,7 @@ impl Store {
     pub async fn account_snapshot_rows(&self, tenant: TenantId) -> Result<Vec<AccountSnapshotRow>> {
         let rows = sqlx::query!(
             "SELECT external_id, name, balance_minor, as_of \
-             FROM account_snapshot WHERE tenant_id = ? ORDER BY as_of, external_id",
+             FROM account_snapshot WHERE tenant_id = ? ORDER BY as_of, external_id, id",
             tenant.0
         )
         .fetch_all(self.pool())

@@ -143,3 +143,66 @@ async fn evaluation_is_deterministic() {
         "same store, same as-of, same findings — byte for byte"
     );
 }
+
+#[tokio::test]
+async fn data_posted_after_as_of_is_invisible_to_evaluation() {
+    let (_dir, store, tenant) = synced_store().await;
+
+    // A future-dated transaction big enough to trip an enabled threshold.
+    let future = veille::domain::Transaction {
+        external_id: "future-wire".into(),
+        account_external_id: "acct-linked-1".into(),
+        posted_at: "2026-09-05".parse().expect("date"),
+        amount_minor: -900_000,
+        currency: "USD".into(),
+        description: "Post-dated wire".into(),
+        category: None,
+        counterparty_key: Some("post-dated wire".into()),
+        is_transfer: false,
+        updated_at: Utc
+            .with_ymd_and_hms(2026, 8, 17, 0, 0, 0)
+            .single()
+            .expect("ts"),
+    };
+    let now = Utc
+        .with_ymd_and_hms(2026, 8, 17, 22, 0, 0)
+        .single()
+        .expect("ts");
+    store
+        .upsert_transactions(tenant, &[future], now)
+        .await
+        .expect("seed");
+
+    let thresholds = RuleThresholds {
+        large_transfer_minor: Some(500_000),
+        ..RuleThresholds::default()
+    };
+
+    // Evaluated at Aug 18, the Sep 5 row does not exist yet.
+    let as_of = Utc
+        .with_ymd_and_hms(2026, 8, 18, 22, 0, 0)
+        .single()
+        .expect("ts");
+    let findings = evaluate_tenant(&store, tenant, thresholds.clone(), as_of, false)
+        .await
+        .expect("evaluate");
+    assert!(
+        findings.iter().all(|f| f.rule_id != "large-transfer"),
+        "a transaction posted after --as-of must be invisible: {findings:?}"
+    );
+
+    // Evaluated after it posts, it fires.
+    let as_of = Utc
+        .with_ymd_and_hms(2026, 9, 6, 22, 0, 0)
+        .single()
+        .expect("ts");
+    let findings = evaluate_tenant(&store, tenant, thresholds, as_of, false)
+        .await
+        .expect("evaluate");
+    assert!(
+        findings
+            .iter()
+            .any(|f| f.dedupe_key == "large-transfer:future-wire"),
+        "the same transaction fires once its posted date has passed"
+    );
+}

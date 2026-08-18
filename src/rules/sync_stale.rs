@@ -35,7 +35,7 @@ impl Rule for SyncStale {
                 // ongoing outage alerts once, and a new outage alerts anew.
                 let episode = institution
                     .last_successful_sync_at
-                    .map(|last| last.date_naive().to_string())
+                    .map(|last| last.to_rfc3339())
                     .unwrap_or_else(|| "never".to_string());
                 Some(Finding {
                     rule_id: self.id().to_string(),
@@ -102,8 +102,12 @@ mod tests {
         assert!(f.subject.contains("First National"));
         assert_eq!(f.evidence["days_stale"], 5);
         assert_eq!(f.evidence["threshold_days"], 4);
-        // Episode identity: the dedupe key is stable while the outage lasts.
-        assert_eq!(f.dedupe_key, "sync-stale:First National:2026-08-13");
+        // Episode identity: the dedupe key is stable while the outage lasts,
+        // and precise enough that two outages on one date stay distinct.
+        assert_eq!(
+            f.dedupe_key,
+            "sync-stale:First National:2026-08-13T06:00:00+00:00"
+        );
     }
 
     #[test]
@@ -147,6 +151,17 @@ mod tests {
             subjects,
             ["institution:Mid Bank", "institution:Zeta Credit Union"],
             "only the stale ones fire"
+        );
+    }
+    #[test]
+    fn two_outages_on_the_same_date_have_distinct_episode_keys() {
+        let morning = Utc.with_ymd_and_hms(2026, 8, 1, 1, 0, 0).single();
+        let evening = Utc.with_ymd_and_hms(2026, 8, 1, 20, 0, 0).single();
+        let a = SyncStale.evaluate(&ctx_with_health(vec![inst("Bank", morning)]));
+        let b = SyncStale.evaluate(&ctx_with_health(vec![inst("Bank", evening)]));
+        assert_ne!(
+            a[0].dedupe_key, b[0].dedupe_key,
+            "distinct outages must not collapse into one finding"
         );
     }
 }

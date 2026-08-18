@@ -140,11 +140,22 @@ pub async fn build_context(
     now: DateTime<Utc>,
 ) -> Result<EvalContext, EngineError> {
     let health = store.upstream_health(tenant).await?;
-    let transactions = store.list_transactions(tenant).await?;
+    // Nothing dated after `now` exists for this evaluation: --as-of must be
+    // reproducible, and post-dated rows must not fire or suppress anything.
+    let as_of_date = now.date_naive();
+    let transactions: Vec<Transaction> = store
+        .list_transactions(tenant)
+        .await?
+        .into_iter()
+        .filter(|t| t.posted_at <= as_of_date)
+        .collect();
 
     let mut balances: BTreeMap<String, Vec<BalancePoint>> = BTreeMap::new();
     let mut account_names: BTreeMap<String, String> = BTreeMap::new();
     for row in store.account_snapshot_rows(tenant).await? {
+        if row.as_of_date > as_of_date {
+            continue;
+        }
         let series = balances.entry(row.external_id.clone()).or_default();
         match series.last_mut() {
             // Several syncs in one day: the last observation of the day wins.

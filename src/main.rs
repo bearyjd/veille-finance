@@ -117,9 +117,18 @@ async fn evaluate_command(
         Some(_) => veille::store::Store::open_in_memory()
             .await
             .map_err(|e| e.to_string())?,
-        None => Store::open(&config.store_path)
-            .await
-            .map_err(|e| e.to_string())?,
+        None => {
+            // A dry run must not create a store that was never synced.
+            if dry_run && !config.store_path.exists() {
+                return Err(format!(
+                    "store {} does not exist — run `veille sync` first",
+                    config.store_path.display()
+                ));
+            }
+            Store::open(&config.store_path)
+                .await
+                .map_err(|e| e.to_string())?
+        }
     };
 
     let selected: Vec<_> = config
@@ -136,15 +145,29 @@ async fn evaluate_command(
 
     let mut failures = Vec::new();
     for tenant_config in selected {
-        let tenant = store
-            .tenants()
-            .ensure(&tenant_config.slug, &tenant_config.display_name)
-            .await
-            .map_err(|e| e.to_string())?;
+        // A dry run against the real store only reads: the tenant must
+        // already exist from a prior sync. Any per-tenant setup failure is
+        // collected so the remaining tenants still get evaluated.
+        let resolved = if dry_run && fixtures.is_none() {
+            store.tenants().by_slug(&tenant_config.slug).await
+        } else {
+            store
+                .tenants()
+                .ensure(&tenant_config.slug, &tenant_config.display_name)
+                .await
+        };
+        let tenant = match resolved {
+            Ok(tenant) => tenant,
+            Err(e) => {
+                tracing::error!(tenant = %tenant_config.slug, error = %e, "tenant unavailable");
+                failures.push(format!("{}: {e}", tenant_config.slug));
+                continue;
+            }
+        };
 
         if let Some(dir) = &fixtures {
             let source = FixtureSureSource::new(dir.clone());
-            sync_tenant(
+            if let Err(e) = sync_tenant(
                 &store,
                 tenant,
                 &source,
@@ -152,7 +175,11 @@ async fn evaluate_command(
                 veille::sync::SyncOptions::default(),
             )
             .await
-            .map_err(|e| format!("fixture sync for {}: {e}", tenant_config.slug))?;
+            {
+                tracing::error!(tenant = %tenant_config.slug, error = %e, "fixture sync failed");
+                failures.push(format!("{}: fixture sync: {e}", tenant_config.slug));
+                continue;
+            }
         }
 
         let persist = !dry_run;

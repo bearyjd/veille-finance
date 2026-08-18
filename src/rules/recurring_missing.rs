@@ -38,11 +38,10 @@ impl Rule for RecurringMissing {
         let current_month = (today.year(), today.month());
         let previous_month = prev_month(current_month);
 
+        // Transfers count: a bill paid by internal transfer is still paid,
+        // and a missed automated savings transfer is a missed deposit.
         let mut by_counterparty: BTreeMap<&str, Vec<&Transaction>> = BTreeMap::new();
         for t in &ctx.transactions {
-            if t.is_transfer {
-                continue;
-            }
             if let Some(key) = t.counterparty_key.as_deref() {
                 by_counterparty.entry(key).or_default().push(t);
             }
@@ -81,10 +80,47 @@ impl Rule for RecurringMissing {
                 continue;
             }
 
+            // One representative per streak month, so an unrelated extra
+            // charge at the same counterparty cannot displace a month from
+            // the statistics: the representative is the occurrence closest
+            // in amount to the streak-wide median (later date breaks ties).
+            let streak_months: BTreeSet<(i32, u32)> = {
+                let mut set = BTreeSet::new();
+                let mut m = last_month;
+                for _ in 0..min_occurrences {
+                    set.insert(m);
+                    m = prev_month(m);
+                }
+                set
+            };
+            let in_streak: Vec<&&Transaction> = occurrences
+                .iter()
+                .filter(|t| streak_months.contains(&(t.posted_at.year(), t.posted_at.month())))
+                .collect();
+            let global_median = median_u128(
+                in_streak
+                    .iter()
+                    .map(|t| u128::from(t.amount_minor.unsigned_abs()))
+                    .collect(),
+            );
+            let representatives: Vec<&&Transaction> = streak_months
+                .iter()
+                .filter_map(|month| {
+                    in_streak
+                        .iter()
+                        .filter(|t| (t.posted_at.year(), t.posted_at.month()) == *month)
+                        .min_by_key(|t| {
+                            let amount = u128::from(t.amount_minor.unsigned_abs());
+                            let distance = amount.abs_diff(global_median);
+                            (distance, std::cmp::Reverse(t.posted_at))
+                        })
+                        .copied()
+                })
+                .collect();
+
             // Regularity separates a bill or paycheck from variable spending:
-            // over the last `min_occurrences` occurrences, max ≤ 1.5 × min.
-            let tail: Vec<&&Transaction> = occurrences.iter().rev().take(min_occurrences).collect();
-            let amounts: Vec<u128> = tail
+            // across the representatives, max ≤ 1.5 × min.
+            let amounts: Vec<u128> = representatives
                 .iter()
                 .map(|t| u128::from(t.amount_minor.unsigned_abs()))
                 .collect();
@@ -97,9 +133,9 @@ impl Rule for RecurringMissing {
                 continue;
             }
 
-            let mut days: Vec<u32> = tail.iter().map(|t| t.posted_at.day()).collect();
+            let mut days: Vec<u32> = representatives.iter().map(|t| t.posted_at.day()).collect();
             days.sort_unstable();
-            let expected_day = days[days.len() / 2];
+            let expected_day = median_day(&days);
 
             let due_by =
                 clamp_to_month(expected_month, expected_day) + chrono::Duration::days(day_window);
@@ -130,6 +166,33 @@ impl Rule for RecurringMissing {
             });
         }
         findings
+    }
+}
+
+/// Median of sorted day-of-month values: middle element for odd counts, the
+/// midpoint of the two middle elements for even counts.
+fn median_day(sorted_days: &[u32]) -> u32 {
+    let n = sorted_days.len();
+    if n == 0 {
+        return 1;
+    }
+    if n % 2 == 1 {
+        sorted_days[n / 2]
+    } else {
+        (sorted_days[n / 2 - 1] + sorted_days[n / 2]) / 2
+    }
+}
+
+fn median_u128(mut values: Vec<u128>) -> u128 {
+    if values.is_empty() {
+        return 0;
+    }
+    values.sort_unstable();
+    let n = values.len();
+    if n % 2 == 1 {
+        values[n / 2]
+    } else {
+        (values[n / 2 - 1] + values[n / 2]) / 2
     }
 }
 
@@ -279,6 +342,74 @@ mod tests {
             RecurringMissing
                 .evaluate(&ctx_with_transactions(txns))
                 .is_empty()
+        );
+    }
+    #[test]
+    fn a_bill_paid_by_transfer_counts_as_present() {
+        let mut txns = utility_bill_series();
+        let mut august = txn("m4", "a1", "2026-08-05", -9_300, "City Electric");
+        august.is_transfer = true;
+        txns.push(august);
+        assert!(
+            RecurringMissing
+                .evaluate(&ctx_with_transactions(txns))
+                .is_empty(),
+            "a transfer occurrence is still an occurrence"
+        );
+    }
+
+    #[test]
+    fn recurring_transfers_are_a_series_too() {
+        let mk = |id: &str, date: &str| {
+            let mut t = txn(id, "a1", date, -50_000, "To Savings");
+            t.is_transfer = true;
+            t
+        };
+        let txns = vec![
+            mk("s1", "2026-05-01"),
+            mk("s2", "2026-06-01"),
+            mk("s3", "2026-07-01"),
+        ];
+        let findings = RecurringMissing.evaluate(&ctx_with_transactions(txns));
+        assert_eq!(
+            findings.len(),
+            1,
+            "a missed automated savings transfer is a missed deposit"
+        );
+    }
+
+    #[test]
+    fn an_unrelated_extra_charge_does_not_hide_a_missing_bill() {
+        let mut txns = utility_bill_series();
+        // Same counterparty, one-off irregular amount late in July.
+        txns.push(txn("x1", "a1", "2026-07-30", -100_000, "City Electric"));
+        let findings = RecurringMissing.evaluate(&ctx_with_transactions(txns));
+        assert_eq!(
+            findings.len(),
+            1,
+            "per-month representatives must be chosen, not the last N raw transactions"
+        );
+    }
+
+    #[test]
+    fn even_count_median_uses_the_middle_of_the_two() {
+        let txns = vec![
+            txn("m1", "a1", "2026-04-01", -9_000, "Split Bill"),
+            txn("m2", "a1", "2026-05-02", -9_000, "Split Bill"),
+            txn("m3", "a1", "2026-06-28", -9_000, "Split Bill"),
+            txn("m4", "a1", "2026-07-29", -9_000, "Split Bill"),
+        ];
+        let mut ctx = ctx_with_transactions(txns);
+        ctx.thresholds.recurring_min_occurrences = 4;
+        // Due date is Aug 15 + 5; evaluate after it has passed.
+        ctx.now = chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2026, 8, 21, 22, 0, 0)
+            .single()
+            .expect("ts");
+        let findings = RecurringMissing.evaluate(&ctx);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].evidence["expected_day"], 15,
+            "median of [1,2,28,29] is 15, not the upper middle"
         );
     }
 }

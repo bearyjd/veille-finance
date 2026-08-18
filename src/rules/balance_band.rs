@@ -45,15 +45,21 @@ impl Rule for BalanceBand {
             }
 
             // Integer statistics: truncating division is fine at band scale.
+            // Saturating arithmetic: balances near i64 extremes must degrade
+            // to a maximally wide band, never wrap or panic.
             let n = baseline.len() as i128;
             let mean = baseline.iter().sum::<i128>() / n;
             let variance = baseline
                 .iter()
-                .map(|b| (b - mean) * (b - mean))
-                .sum::<i128>()
+                .map(|b| {
+                    let d = b - mean;
+                    d.checked_mul(d).unwrap_or(i128::MAX)
+                })
+                .fold(0i128, i128::saturating_add)
                 / n;
-            let sigma = (variance as u128).isqrt() as i128;
-            let band = (2 * sigma)
+            let sigma = (variance.unsigned_abs()).isqrt() as i128;
+            let band = sigma
+                .saturating_mul(2)
                 .max(mean.abs() / 20)
                 .max(i128::from(MIN_BAND_MINOR));
 
@@ -61,7 +67,7 @@ impl Rule for BalanceBand {
             if deviation.abs() <= band {
                 continue;
             }
-            let severity = if deviation.abs() > 2 * band {
+            let severity = if deviation.abs() > band.saturating_mul(2) {
                 Severity::Warn
             } else {
                 Severity::Info
@@ -74,9 +80,9 @@ impl Rule for BalanceBand {
                 evidence: json!({
                     "account_external_id": account_id,
                     "balance_minor": latest.balance_minor,
-                    "mean_minor": mean as i64,
-                    "band_minor": band as i64,
-                    "deviation_minor": deviation as i64,
+                    "mean_minor": clamp_i64(mean),
+                    "band_minor": clamp_i64(band),
+                    "deviation_minor": clamp_i64(deviation),
                     "direction": direction,
                     "window_days": ctx.thresholds.balance_band_window_days,
                     "baseline_points": baseline.len(),
@@ -87,6 +93,12 @@ impl Rule for BalanceBand {
         }
         findings
     }
+}
+
+/// Evidence values narrow to i64: clamp instead of wrapping, so a saturated
+/// statistic can never flip sign in the record.
+fn clamp_i64(value: i128) -> i64 {
+    i64::try_from(value).unwrap_or(if value > 0 { i64::MAX } else { i64::MIN })
 }
 
 #[cfg(test)]
@@ -188,5 +200,33 @@ mod tests {
         let mut ctx = ctx_with_series(points);
         ctx.thresholds.balance_band_window_days = 10;
         assert!(BalanceBand.evaluate(&ctx).is_empty());
+    }
+    #[test]
+    fn extreme_balances_do_not_panic_or_corrupt_direction() {
+        let points = vec![
+            ("2026-08-01", i64::MAX),
+            ("2026-08-02", i64::MAX),
+            ("2026-08-03", i64::MAX),
+            ("2026-08-04", i64::MIN),
+            ("2026-08-05", i64::MIN),
+            ("2026-08-17", i64::MAX),
+        ];
+        // Must not overflow in debug builds.
+        let findings = BalanceBand.evaluate(&ctx_with_series(points));
+        for f in &findings {
+            let direction = f.evidence["direction"].as_str().expect("direction");
+            let deviation = f.evidence["deviation_minor"].as_i64().expect("deviation");
+            if direction == "above" {
+                assert!(
+                    deviation >= 0,
+                    "direction and deviation sign must agree: {f:?}"
+                );
+            } else {
+                assert!(
+                    deviation <= 0,
+                    "direction and deviation sign must agree: {f:?}"
+                );
+            }
+        }
     }
 }
