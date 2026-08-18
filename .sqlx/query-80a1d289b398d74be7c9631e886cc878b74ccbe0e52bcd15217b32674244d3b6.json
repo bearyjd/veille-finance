@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT MAX(posted_at) as \"d?: String\" FROM transactions WHERE tenant_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "d?: String",
+        "ordinal": 0,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "80a1d289b398d74be7c9631e886cc878b74ccbe0e52bcd15217b32674244d3b6"
+}

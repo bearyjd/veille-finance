@@ -15,3 +15,14 @@ target/
 
 # Phase 0 test rig runtime state
 phase0/**/.env
+
+
+# Added by cargo
+
+/target
+
+# Local dev database for sqlx compile-time checking
+.dev/
+
+# OMC harness session state
+.omc/

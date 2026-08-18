@@ -1,0 +1,17 @@
+# veille configuration example. Copy to config/veille.toml (gitignored) and
+# adjust per deployment. Secrets never live in this file: each upstream names
+# the environment variable that holds its read-scoped Sure API key.
+
+store_path = "/var/lib/veille/veille.sqlite3"
+
+[[tenants]]
+slug = "example"
+display_name = "Example Household"
+
+[tenants.upstream]
+# Reachable over the internal Docker network; veille publishes no ports and
+# Sure instances stay tenant-per-instance (ADR-001).
+base_url = "http://sure-example:3000"
+# Name of the env var holding a `read`-scoped API key created by the Sure
+# user that owns (or has shares to) every watched account.
+api_key_env = "VEILLE_API_KEY_EXAMPLE"
