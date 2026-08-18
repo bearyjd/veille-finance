@@ -176,15 +176,19 @@ async fn run_command(
                 })
             });
 
+    let mut failures = Vec::new();
     let email: Option<Box<dyn veille::deliver::EmailSender>> = match &config.smtp {
         Some(section) => match veille::deliver::smtp::LettreSmtp::new(section) {
             Ok(transport) => Some(Box::new(transport)),
-            Err(e) => return Err(format!("smtp setup: {e}")),
+            Err(e) => {
+                // Broken SMTP must not stop push-only delivery.
+                tracing::error!(error = %e, "smtp setup failed; digests disabled this run");
+                failures.push(format!("smtp setup: {e}"));
+                None
+            }
         },
         None => None,
     };
-
-    let mut failures = Vec::new();
     for tenant_config in selected {
         let source: Box<dyn SureSource> = match build_source(tenant_config, &None) {
             Ok(source) => source,

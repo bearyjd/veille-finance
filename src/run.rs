@@ -46,6 +46,12 @@ pub struct RunOutcome {
     pub findings_active: usize,
     pub alerts_pushed: usize,
     pub digest_sent: bool,
+    /// The sync failed; evaluation and delivery ran from stored state. A dead
+    /// upstream is exactly when sync-stale alerts must still go out.
+    pub sync_error: Option<String>,
+    /// Delivery attempts that failed this run — surfaced so the timer exits
+    /// nonzero instead of reporting silent success.
+    pub delivery_failures: Vec<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -59,11 +65,21 @@ pub async fn run_tenant_once(
     now: DateTime<Utc>,
     options: RunOptions<'_>,
 ) -> Result<RunOutcome, RunError> {
-    sync_tenant(store, tenant, source, now, options.sync).await?;
+    // A failed sync must not starve delivery: the store still holds the
+    // last-known state, stale health makes sync-stale fire, and that alert
+    // going out is the whole point of this tool.
+    let sync_error = match sync_tenant(store, tenant, source, now, options.sync).await {
+        Ok(_) => None,
+        Err(e) => {
+            tracing::warn!(tenant = ?tenant, error = %e, "sync failed; delivering from stored state");
+            Some(e.to_string())
+        }
+    };
     let findings = evaluate_tenant(store, tenant, tenant_config.rules.clone(), now, true).await?;
 
     let mut outcome = RunOutcome {
         findings_active: findings.len(),
+        sync_error,
         ..RunOutcome::default()
     };
 
@@ -75,17 +91,14 @@ pub async fn run_tenant_once(
             let title = format!("{} - veille alert", tenant_config.display_name);
             match push.send(&title, &finding.summary).await {
                 Ok(()) => {
-                    store.mark_pushed(tenant, &finding.dedupe_key, now).await?;
-                    store
-                        .record_delivery(
-                            tenant,
-                            "push",
-                            &push.destination(),
-                            std::slice::from_ref(&finding.dedupe_key),
-                            now,
-                        )
-                        .await?;
-                    outcome.alerts_pushed += 1;
+                    // Atomic claim + audit; false means another run recorded
+                    // it first (duplicate external send, single audit row).
+                    if store
+                        .record_push(tenant, &finding.dedupe_key, &push.destination(), now)
+                        .await?
+                    {
+                        outcome.alerts_pushed += 1;
+                    }
                 }
                 Err(reason) => {
                     tracing::warn!(
@@ -94,6 +107,9 @@ pub async fn run_tenant_once(
                         %reason,
                         "alert push failed; will retry next run"
                     );
+                    outcome
+                        .delivery_failures
+                        .push(format!("push {}: {reason}", finding.dedupe_key));
                 }
             }
         }
@@ -135,16 +151,17 @@ pub async fn run_tenant_once(
                     .iter()
                     .map(|f| f.dedupe_key.clone())
                     .collect();
-                for recipient in &to {
-                    store
-                        .record_delivery(tenant, "smtp", recipient, &finding_keys, now)
-                        .await?;
-                }
+                // All recipient rows in one transaction: a partial commit
+                // could otherwise record a watcher without the owners.
+                store
+                    .record_smtp_deliveries(tenant, &to, &finding_keys, now)
+                    .await?;
                 outcome.digest_sent = true;
             }
             Err(reason) => {
                 // No audit rows on failure: the next run today retries.
                 tracing::warn!(tenant = ?tenant, %reason, "digest send failed; will retry");
+                outcome.delivery_failures.push(format!("digest: {reason}"));
             }
         }
     }

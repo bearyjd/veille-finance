@@ -322,48 +322,76 @@ impl Store {
             .collect()
     }
 
-    pub async fn mark_pushed(
+    /// Atomically claim a pushed alert and write its audit row in one
+    /// transaction. Returns `false` when another run already claimed it —
+    /// in that case nothing is written. Either both the `pushed_at` mark and
+    /// the audit row commit, or neither does: a partial state can neither
+    /// silence an alert's audit trail nor starve its retry.
+    pub async fn record_push(
         &self,
         tenant: TenantId,
         dedupe_key: &str,
+        destination: &str,
         at: DateTime<Utc>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let at = at.to_rfc3339();
-        sqlx::query!(
+        let mut tx = self.pool().begin().await?;
+        let claimed = sqlx::query!(
             "UPDATE finding SET pushed_at = ? \
              WHERE tenant_id = ? AND dedupe_key = ? AND pushed_at IS NULL",
             at,
             tenant.0,
             dedupe_key,
         )
-        .execute(self.pool())
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        if claimed == 0 {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+        let finding_ids = serde_json::to_string(&[dedupe_key]).unwrap_or_else(|_| "[]".to_string());
+        sqlx::query!(
+            "INSERT INTO delivery (tenant_id, channel, recipient, finding_ids, sent_at) \
+             VALUES (?, 'push', ?, ?, ?)",
+            tenant.0,
+            destination,
+            finding_ids,
+            at,
+        )
+        .execute(&mut *tx)
         .await?;
-        Ok(())
+        tx.commit().await?;
+        Ok(true)
     }
 
-    /// Append one audit row per (channel, recipient) send (PRP §6: every send
-    /// is recorded).
-    pub async fn record_delivery(
+    /// Record one digest send: one audit row per recipient, all in a single
+    /// transaction — either every owner and watcher row commits together or
+    /// none does (PRP §2.2: a partial write must never record a watcher
+    /// without the owners).
+    pub async fn record_smtp_deliveries(
         &self,
         tenant: TenantId,
-        channel: &str,
-        recipient: &str,
+        recipients: &[String],
         finding_keys: &[String],
         sent_at: DateTime<Utc>,
     ) -> Result<()> {
         let finding_ids = serde_json::to_string(finding_keys).unwrap_or_else(|_| "[]".to_string());
         let sent_at = sent_at.to_rfc3339();
-        sqlx::query!(
-            "INSERT INTO delivery (tenant_id, channel, recipient, finding_ids, sent_at) \
-             VALUES (?, ?, ?, ?, ?)",
-            tenant.0,
-            channel,
-            recipient,
-            finding_ids,
-            sent_at,
-        )
-        .execute(self.pool())
-        .await?;
+        let mut tx = self.pool().begin().await?;
+        for recipient in recipients {
+            sqlx::query!(
+                "INSERT INTO delivery (tenant_id, channel, recipient, finding_ids, sent_at) \
+                 VALUES (?, 'smtp', ?, ?, ?)",
+                tenant.0,
+                recipient,
+                finding_ids,
+                sent_at,
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
         Ok(())
     }
 

@@ -408,3 +408,113 @@ mod ntfy_transport {
         );
     }
 }
+
+/// A source whose every call fails — the upstream is down.
+struct DeadSource;
+
+#[async_trait]
+impl veille::source::SureSource for DeadSource {
+    async fn accounts(&self) -> veille::source::Result<Vec<veille::domain::Account>> {
+        Err(veille::source::SourceError::Request("upstream down".into()))
+    }
+    async fn transactions(
+        &self,
+        _since: chrono::DateTime<Utc>,
+    ) -> veille::source::Result<Vec<veille::domain::Transaction>> {
+        Err(veille::source::SourceError::Request("upstream down".into()))
+    }
+    async fn holdings(&self) -> veille::source::Result<Vec<veille::domain::Holding>> {
+        Err(veille::source::SourceError::Request("upstream down".into()))
+    }
+    async fn health(&self) -> veille::source::Result<veille::domain::UpstreamHealth> {
+        Err(veille::source::SourceError::Request("upstream down".into()))
+    }
+}
+
+#[tokio::test]
+async fn a_dead_upstream_does_not_starve_owed_deliveries() {
+    // The failure mode this tool exists for: the upstream dies, the stored
+    // health goes stale, sync-stale fires — and the alert must still go out
+    // even though sync itself fails.
+    let dir = TempDir::new().expect("tempdir");
+    let (store, tenant) = fresh_store(&dir).await;
+    let push = FakePush::default();
+    let email = FakeEmail::default();
+    let config = tenant_config(Some("monday"));
+
+    // Seed the store from a working upstream first.
+    run_tenant_once(
+        &store,
+        tenant,
+        &config,
+        &fixture_source(),
+        None, // no push yet: leave the alert owed
+        Some(&email),
+        eval_now(),
+        RunOptions::default(),
+    )
+    .await
+    .expect("seed run");
+
+    // Now the upstream is dead. The owed alert must still push.
+    let outcome = run_tenant_once(
+        &store,
+        tenant,
+        &config,
+        &DeadSource,
+        Some(&push),
+        Some(&email),
+        eval_now() + chrono::Duration::hours(1),
+        RunOptions::default(),
+    )
+    .await
+    .expect("run tolerates a dead upstream");
+    assert!(outcome.sync_error.is_some(), "the sync failure is reported");
+    assert_eq!(
+        push.sent.lock().expect("lock").len(),
+        1,
+        "owed alerts deliver from stored state even when sync fails"
+    );
+}
+
+#[tokio::test]
+async fn failed_digest_sends_write_no_audit_rows_and_are_reported() {
+    #[derive(Default)]
+    struct FailingEmail;
+    #[async_trait]
+    impl EmailSender for FailingEmail {
+        async fn send(&self, _: &[String], _: &str, _: &str, _: &str) -> Result<(), String> {
+            Err("smtp rejected".into())
+        }
+    }
+
+    let dir = TempDir::new().expect("tempdir");
+    let (store, tenant) = fresh_store(&dir).await;
+    let push = FakePush::default();
+    let email = FailingEmail;
+    let now = eval_now();
+    let config = tenant_config(Some(weekday_name(now)));
+
+    let outcome = run_tenant_once(
+        &store,
+        tenant,
+        &config,
+        &fixture_source(),
+        Some(&push),
+        Some(&email),
+        now,
+        RunOptions::default(),
+    )
+    .await
+    .expect("run survives");
+    assert!(!outcome.digest_sent);
+    assert!(
+        !outcome.delivery_failures.is_empty(),
+        "a due-but-failed digest must be visible to the timer"
+    );
+    let rows = store.deliveries(tenant).await.expect("rows");
+    assert!(
+        rows.iter().all(|r| r.channel != "smtp"),
+        "no audit rows for a send that did not happen"
+    );
+}

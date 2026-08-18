@@ -45,10 +45,12 @@ impl PushSender for NtfyPush {
         if let Some(token) = &self.token {
             request = request.header(reqwest::header::AUTHORIZATION, token.clone());
         }
+        // without_url: ntfy topic paths are capability secrets and must not
+        // reach logs through transport error text.
         let response = request
             .send()
             .await
-            .map_err(|e| format!("push request: {e}"))?;
+            .map_err(|e| format!("push request: {}", e.without_url()))?;
         let status = response.status();
         if !status.is_success() {
             return Err(format!("push endpoint returned HTTP {status}"));

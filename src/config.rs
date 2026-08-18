@@ -68,6 +68,10 @@ pub struct PushConfig {
     pub url: String,
     /// Env var holding a bearer token, when the ntfy server requires auth.
     pub token_env: Option<String>,
+    /// Explicit opt-in for plaintext http push (internal networks only) —
+    /// the body is financial data and the token is a header.
+    #[serde(default)]
+    pub allow_http: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -229,7 +233,18 @@ impl Config {
             }
             let mut has_owner = false;
             let mut has_watcher = false;
+            let mut seen_emails = std::collections::BTreeSet::new();
             for recipient in &tenant.recipients {
+                // One address, one person: a watcher's address doubling as
+                // the "owner" would satisfy role checks with no distinct
+                // owner destination.
+                if !seen_emails.insert(recipient.email.trim().to_lowercase()) {
+                    return Err(invalid(format!(
+                        "tenant {:?}: recipient email {:?} appears more than once",
+                        tenant.slug,
+                        recipient.email.trim().to_lowercase()
+                    )));
+                }
                 match recipient.role.as_str() {
                     "owner" => has_owner = true,
                     "watcher" => has_watcher = true,
@@ -255,13 +270,31 @@ impl Config {
                     tenant.slug
                 )));
             }
-            if let Some(push) = &tenant.push
-                && !(push.url.starts_with("http://") || push.url.starts_with("https://"))
-            {
-                return Err(invalid(format!(
-                    "tenant {:?}: push url must use http:// or https://",
-                    tenant.slug
-                )));
+            if let Some(push) = &tenant.push {
+                let https = push.url.starts_with("https://");
+                let http = push.url.starts_with("http://");
+                if !(https || http) {
+                    return Err(invalid(format!(
+                        "tenant {:?}: push url must use http:// or https://",
+                        tenant.slug
+                    )));
+                }
+                if http && !push.allow_http {
+                    return Err(invalid(format!(
+                        "tenant {:?}: push url must use https (alerts carry financial                          data); set allow_http = true only for a trusted internal network",
+                        tenant.slug
+                    )));
+                }
+                // The topic-subscription model cannot prove who subscribes.
+                // Requiring owner recipients guarantees the symmetric email
+                // channel carries every alert in the digest regardless of
+                // who follows the topic (§2.2).
+                if !has_owner {
+                    return Err(invalid(format!(
+                        "tenant {:?}: push requires at least one owner recipient —                          the digest is the channel that guarantees owners see every                          alert (PRP §2.2)",
+                        tenant.slug
+                    )));
+                }
             }
             let base_url = tenant.upstream.base_url.trim();
             if !(base_url.starts_with("http://") || base_url.starts_with("https://")) {

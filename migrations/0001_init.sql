@@ -1,4 +1,7 @@
 -- veille schema v1 (PRP-veille-001 §6).
+-- FROZEN at the v1 release: this file was edited freely while no deployed
+-- store existed. From the first deployment on, schema changes are NEW
+-- migration files only — sqlx verifies applied-migration checksums.
 -- All money columns are integer minor units; positive amount = inflow.
 -- Naming deviation from the PRP: the spec's `transaction` table is named
 -- `transactions` here because TRANSACTION is an SQL keyword.

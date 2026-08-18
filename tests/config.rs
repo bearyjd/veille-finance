@@ -312,3 +312,60 @@ api_key_env = "K"
     );
     assert!(Config::load(f.path()).is_err(), "invalid weekday must fail");
 }
+
+#[test]
+fn duplicate_recipient_emails_are_rejected() {
+    // A watcher's address doubling as the "owner" would satisfy role
+    // validation while no distinct owner destination exists.
+    let f = write_config(&format!(
+        r#"{RECIPIENT_TENANT_HEADER}
+[[tenants.recipients]]
+name = "Watcher"
+role = "watcher"
+email = "same@example.com"
+[[tenants.recipients]]
+name = "Owner"
+role = "owner"
+email = "Same@Example.com"
+"#
+    ));
+    let err = Config::load(f.path()).expect_err("duplicate emails must fail");
+    assert!(err.to_string().contains("same@example.com"), "{err}");
+}
+
+#[test]
+fn push_requires_an_owner_recipient() {
+    // The topic-subscription model cannot prove who subscribes; requiring
+    // owner recipients guarantees the symmetric email channel carries every
+    // alert regardless.
+    let f = write_config(&format!(
+        r#"{RECIPIENT_TENANT_HEADER}
+[tenants.push]
+url = "https://ntfy.example/topic"
+"#
+    ));
+    let err = Config::load(f.path()).expect_err("push without owner recipients must fail");
+    assert!(err.to_string().contains("owner"), "{err}");
+}
+
+#[test]
+fn plaintext_push_urls_need_explicit_opt_in() {
+    let base = format!(
+        r#"{RECIPIENT_TENANT_HEADER}
+[[tenants.recipients]]
+name = "Mom"
+role = "owner"
+email = "mom@example.com"
+"#
+    );
+    let f = write_config(&format!(
+        "{base}[tenants.push]\nurl = \"http://ntfy.internal/topic\"\n"
+    ));
+    let err = Config::load(f.path()).expect_err("http push must fail by default");
+    assert!(err.to_string().contains("https"), "{err}");
+
+    let f = write_config(&format!(
+        "{base}[tenants.push]\nurl = \"http://ntfy.internal/topic\"\nallow_http = true\n"
+    ));
+    Config::load(f.path()).expect("explicit opt-in allows internal http");
+}

@@ -55,3 +55,12 @@ api_key_env = "VEILLE_API_KEY_EXAMPLE"
 # from = "veille@example.com"
 # username_env = "VEILLE_SMTP_USERNAME"
 # password_env = "VEILLE_SMTP_PASSWORD"
+
+# Operational notes:
+# - Push symmetry (§2.2): the ntfy topic URL must be given to every owner
+#   and watcher, owners first. veille cannot see who subscribes; what it
+#   guarantees is that every alert also appears in the digest email, which
+#   always goes to owners and watchers together.
+# - Run one `veille run --once` at a time per store. A systemd timer for a
+#   single service unit never overlaps itself; avoid running two units
+#   against the same store_path.
