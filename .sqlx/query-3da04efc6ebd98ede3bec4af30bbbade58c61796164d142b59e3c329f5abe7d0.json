@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE finding SET pushed_at = ? WHERE tenant_id = ? AND dedupe_key = ? AND pushed_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "3da04efc6ebd98ede3bec4af30bbbade58c61796164d142b59e3c329f5abe7d0"
+}

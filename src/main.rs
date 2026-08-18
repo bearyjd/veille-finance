@@ -40,6 +40,18 @@ enum Command {
         #[arg(long)]
         full: bool,
     },
+    /// One full cycle: sync, evaluate, deliver (the systemd timer target)
+    Run {
+        /// Required: run exactly one cycle and exit (veille has no scheduler)
+        #[arg(long)]
+        once: bool,
+        /// Only this tenant (default: all configured tenants)
+        #[arg(long)]
+        tenant: Option<String>,
+        /// Ignore the incremental watermark and pull full history
+        #[arg(long)]
+        full: bool,
+    },
     /// Render the digest for a period to stdout
     Digest {
         /// Only this tenant (default: all configured tenants)
@@ -110,10 +122,175 @@ async fn run(cli: Cli) -> Result<(), String> {
             as_of,
             html,
         } => digest_command(&config, tenant, as_of, html).await,
+        Command::Run { once, tenant, full } => run_command(&config, once, tenant, full).await,
     }
 }
 
 const DEFAULT_DIGEST_PERIOD_DAYS: u32 = 7;
+
+struct LlmNarrator {
+    client: reqwest::Client,
+    config: veille::narrate::LlmConfig,
+}
+
+#[async_trait::async_trait]
+impl veille::run::Narrator for LlmNarrator {
+    async fn narrate(&self, input: &veille::digest::DigestInput) -> Option<String> {
+        veille::narrate::narrate(&self.client, &self.config, input).await
+    }
+}
+
+async fn run_command(
+    config: &Config,
+    once: bool,
+    only_tenant: Option<String>,
+    full: bool,
+) -> Result<(), String> {
+    if !once {
+        // No scheduler in the binary (PRP: invocation is a systemd timer).
+        return Err("veille run requires --once; scheduling belongs to the timer".into());
+    }
+    let now = chrono::Utc::now();
+    let store = Store::open(&config.store_path)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let selected: Vec<_> = config
+        .tenants
+        .iter()
+        .filter(|t| only_tenant.as_deref().is_none_or(|slug| slug == t.slug))
+        .collect();
+    if selected.is_empty() {
+        return Err(match only_tenant {
+            Some(slug) => format!("tenant {slug:?} is not in the config"),
+            None => "config contains no tenants".into(),
+        });
+    }
+
+    let narrator =
+        veille::narrate::LlmConfig::resolve(config.llm.as_ref().and_then(|l| l.model.as_deref()))
+            .and_then(|llm| {
+                veille::narrate::LlmConfig::client().map(|client| LlmNarrator {
+                    client,
+                    config: llm,
+                })
+            });
+
+    let mut failures = Vec::new();
+    let email: Option<Box<dyn veille::deliver::EmailSender>> = match &config.smtp {
+        Some(section) => match veille::deliver::smtp::LettreSmtp::new(section) {
+            Ok(transport) => Some(Box::new(transport)),
+            Err(e) => {
+                // Broken SMTP must not stop push-only delivery.
+                tracing::error!(error = %e, "smtp setup failed; digests disabled this run");
+                failures.push(format!("smtp setup: {e}"));
+                None
+            }
+        },
+        None => None,
+    };
+    for tenant_config in selected {
+        let source: Box<dyn SureSource> = match build_source(tenant_config, &None) {
+            Ok(source) => source,
+            Err(message) => {
+                tracing::error!(tenant = %tenant_config.slug, error = %message, "source setup failed");
+                failures.push(format!("{}: {message}", tenant_config.slug));
+                continue;
+            }
+        };
+        let push: Option<Box<dyn veille::deliver::PushSender>> = match &tenant_config.push {
+            Some(push_config) => {
+                let token = push_config
+                    .token_env
+                    .as_deref()
+                    .map(|name| {
+                        std::env::var(name)
+                            .map_err(|_| format!("environment variable {name} is not set"))
+                    })
+                    .transpose();
+                match token {
+                    Ok(token) => {
+                        match veille::deliver::push::NtfyPush::new(push_config.url.clone(), token) {
+                            Ok(sender) => Some(Box::new(sender)),
+                            Err(e) => {
+                                failures.push(format!("{}: push setup: {e}", tenant_config.slug));
+                                continue;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        failures.push(format!("{}: {e}", tenant_config.slug));
+                        continue;
+                    }
+                }
+            }
+            None => None,
+        };
+
+        let tenant = match store
+            .tenants()
+            .ensure(&tenant_config.slug, &tenant_config.display_name)
+            .await
+        {
+            Ok(tenant) => tenant,
+            Err(e) => {
+                failures.push(format!("{}: {e}", tenant_config.slug));
+                continue;
+            }
+        };
+
+        let options = veille::run::RunOptions {
+            sync: veille::sync::SyncOptions {
+                lookback_days: tenant_config
+                    .lookback_days
+                    .unwrap_or(veille::sync::DEFAULT_LOOKBACK_DAYS),
+                full,
+            },
+            narrator: narrator.as_ref().map(|n| n as &dyn veille::run::Narrator),
+        };
+
+        match veille::run::run_tenant_once(
+            &store,
+            tenant,
+            tenant_config,
+            source.as_ref(),
+            push.as_deref(),
+            email.as_deref(),
+            now,
+            options,
+        )
+        .await
+        {
+            Ok(outcome) => {
+                println!(
+                    "{}: {} active findings, {} alerts pushed, digest {}",
+                    tenant_config.slug,
+                    outcome.findings_active,
+                    outcome.alerts_pushed,
+                    if outcome.digest_sent {
+                        "sent"
+                    } else {
+                        "not due"
+                    },
+                );
+            }
+            Err(e) => {
+                tracing::error!(tenant = %tenant_config.slug, error = %e, "run failed");
+                failures.push(format!("{}: {e}", tenant_config.slug));
+            }
+        }
+    }
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "run failed for {} tenant(s): {}",
+            failures.len(),
+            failures.join("; ")
+        ))
+    }
+}
 
 async fn digest_command(
     config: &Config,

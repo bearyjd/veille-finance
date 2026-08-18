@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO delivery (tenant_id, channel, recipient, finding_ids, sent_at) VALUES (?, 'push', ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "051a88444b87861a3f4b0c489b96f2a29fcecc4cb9e099f84e7c630a70c0e7ef"
+}

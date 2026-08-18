@@ -224,3 +224,220 @@ api_key_env = "K"
         "u32::MAX digest period must fail"
     );
 }
+
+const RECIPIENT_TENANT_HEADER: &str = r#"
+store_path = "/tmp/v.sqlite3"
+[[tenants]]
+slug = "parents"
+display_name = "Parents"
+[tenants.upstream]
+base_url = "http://a:3000"
+api_key_env = "K"
+"#;
+
+#[test]
+fn watchers_cannot_exist_without_owners() {
+    // §2.2: a watcher-only recipient list is surveillance, not oversight.
+    let f = write_config(&format!(
+        r#"{RECIPIENT_TENANT_HEADER}
+[[tenants.recipients]]
+name = "JD"
+role = "watcher"
+email = "jd@example.com"
+"#
+    ));
+    let err = Config::load(f.path()).expect_err("watcher without owner must fail");
+    assert!(
+        err.to_string().contains("owner"),
+        "error should explain the symmetry requirement: {err}"
+    );
+}
+
+#[test]
+fn recipients_parse_with_roles_and_invalid_ones_fail() {
+    let f = write_config(&format!(
+        r#"{RECIPIENT_TENANT_HEADER}
+[[tenants.recipients]]
+name = "Mom"
+role = "owner"
+email = "mom@example.com"
+[[tenants.recipients]]
+name = "JD"
+role = "watcher"
+email = "jd@example.com"
+"#
+    ));
+    let config = Config::load(f.path()).expect("valid recipients");
+    assert_eq!(config.tenants[0].recipients.len(), 2);
+
+    let f = write_config(&format!(
+        r#"{RECIPIENT_TENANT_HEADER}
+[[tenants.recipients]]
+name = "X"
+role = "admin"
+email = "x@example.com"
+"#
+    ));
+    assert!(Config::load(f.path()).is_err(), "unknown role must fail");
+
+    let f = write_config(&format!(
+        r#"{RECIPIENT_TENANT_HEADER}
+[[tenants.recipients]]
+name = "X"
+role = "owner"
+email = "not-an-email"
+"#
+    ));
+    assert!(Config::load(f.path()).is_err(), "email without @ must fail");
+}
+
+#[test]
+fn digest_day_is_validated() {
+    let f = write_config(&format!(
+        "{RECIPIENT_TENANT_HEADER}\ndigest_day = \"sunday\"\n"
+    ));
+    // digest_day is a tenant field; append inside the tenant table instead.
+    let _ = f;
+    let f = write_config(
+        r#"
+store_path = "/tmp/v.sqlite3"
+[[tenants]]
+slug = "parents"
+display_name = "Parents"
+digest_day = "someday"
+[tenants.upstream]
+base_url = "http://a:3000"
+api_key_env = "K"
+"#,
+    );
+    assert!(Config::load(f.path()).is_err(), "invalid weekday must fail");
+}
+
+#[test]
+fn duplicate_recipient_emails_are_rejected() {
+    // A watcher's address doubling as the "owner" would satisfy role
+    // validation while no distinct owner destination exists.
+    let f = write_config(&format!(
+        r#"{RECIPIENT_TENANT_HEADER}
+[[tenants.recipients]]
+name = "Watcher"
+role = "watcher"
+email = "same@example.com"
+[[tenants.recipients]]
+name = "Owner"
+role = "owner"
+email = "Same@Example.com"
+"#
+    ));
+    let err = Config::load(f.path()).expect_err("duplicate emails must fail");
+    assert!(err.to_string().contains("same@example.com"), "{err}");
+}
+
+#[test]
+fn push_requires_an_owner_recipient() {
+    // The topic-subscription model cannot prove who subscribes; requiring
+    // owner recipients guarantees the symmetric email channel carries every
+    // alert regardless.
+    let f = write_config(&format!(
+        r#"{RECIPIENT_TENANT_HEADER}
+[tenants.push]
+url = "https://ntfy.example/topic"
+"#
+    ));
+    let err = Config::load(f.path()).expect_err("push without owner recipients must fail");
+    assert!(err.to_string().contains("owner"), "{err}");
+}
+
+#[test]
+fn plaintext_push_urls_need_explicit_opt_in() {
+    let base = format!(
+        r#"{RECIPIENT_TENANT_HEADER}
+[[tenants.recipients]]
+name = "Mom"
+role = "owner"
+email = "mom@example.com"
+"#
+    );
+    let f = write_config(&format!(
+        "{base}[tenants.push]\nurl = \"http://ntfy.internal/topic\"\n"
+    ));
+    let err = Config::load(f.path()).expect_err("http push must fail by default");
+    assert!(err.to_string().contains("https"), "{err}");
+
+    let f = write_config(&format!(
+        "{base}[tenants.push]\nurl = \"http://ntfy.internal/topic\"\nallow_http = true\n"
+    ));
+    Config::load(f.path()).expect("explicit opt-in allows internal http");
+}
+
+#[test]
+fn two_tenants_cannot_share_a_push_topic() {
+    let f = write_config(
+        r#"
+store_path = "/tmp/v.sqlite3"
+[[tenants]]
+slug = "jd"
+display_name = "Self"
+[tenants.upstream]
+base_url = "http://a:3000"
+api_key_env = "K1"
+[[tenants.recipients]]
+name = "JD"
+role = "owner"
+email = "jd@example.com"
+[tenants.push]
+url = "https://ntfy.example/shared-topic"
+[[tenants]]
+slug = "parents"
+display_name = "Parents"
+[tenants.upstream]
+base_url = "http://b:3000"
+api_key_env = "K2"
+[[tenants.recipients]]
+name = "Mom"
+role = "owner"
+email = "mom@example.com"
+[tenants.push]
+url = "https://ntfy.example/shared-topic"
+"#,
+    );
+    let err = Config::load(f.path()).expect_err("shared push topic must fail");
+    assert!(err.to_string().contains("push"), "{err}");
+}
+
+#[test]
+fn recipient_addresses_must_parse_as_mailboxes_at_load_time() {
+    let f = write_config(&format!(
+        r#"{RECIPIENT_TENANT_HEADER}
+[[tenants.recipients]]
+name = "Broken"
+role = "owner"
+email = "no space allowed@@example"
+"#
+    ));
+    assert!(
+        Config::load(f.path()).is_err(),
+        "an address that would fail at send time must fail at load time"
+    );
+}
+
+#[test]
+fn implicit_tls_smtp_port_is_rejected() {
+    let f = write_config(
+        r#"
+store_path = "/tmp/v.sqlite3"
+[smtp]
+host = "smtp.example.com"
+port = 465
+from = "veille@example.com"
+[[tenants]]
+slug = "jd"
+display_name = "Self"
+[tenants.upstream]
+base_url = "http://a:3000"
+api_key_env = "K"
+"#,
+    );
+    let err = Config::load(f.path()).expect_err("port 465 is implicit TLS, not STARTTLS");
+    assert!(err.to_string().contains("465"), "{err}");
+}

@@ -1,8 +1,10 @@
 pub mod config;
+pub mod deliver;
 pub mod digest;
 pub mod domain;
 pub mod narrate;
 pub mod rules;
+pub mod run;
 pub mod source;
 pub mod store;
 pub mod sync;

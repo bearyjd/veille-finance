@@ -26,3 +26,41 @@ base_url = "http://sure-example:3000"
 # Name of the env var holding a `read`-scoped API key created by the Sure
 # user that owns (or has shares to) every watched account.
 api_key_env = "VEILLE_API_KEY_EXAMPLE"
+
+# Digest and alert recipients (PRP §2.2, §9). Roles are for validation and
+# the audit trail only — every delivery reaches owners AND watchers, always.
+# A tenant with watchers but no owner is rejected at startup.
+# [[tenants.recipients]]
+# name = "Mom"
+# role = "owner"
+# email = "mom@example.com"
+# [[tenants.recipients]]
+# name = "JD"
+# role = "watcher"
+# email = "jd@example.com"
+
+# Immediate push channel for Alert-severity findings (ntfy topic; everyone
+# entitled to alerts subscribes to this one topic).
+# [tenants.push]
+# url = "https://ntfy.example.com/veille-example"
+# token_env = "VEILLE_NTFY_TOKEN_EXAMPLE"   # optional
+
+# Weekday the digest email goes out (default "sunday", matched in UTC).
+# digest_day = "sunday"
+
+# Global SMTP transport for digest delivery. Credentials via env vars.
+# [smtp]
+# host = "smtp.example.com"
+# port = 587
+# from = "veille@example.com"
+# username_env = "VEILLE_SMTP_USERNAME"
+# password_env = "VEILLE_SMTP_PASSWORD"
+
+# Operational notes:
+# - Push symmetry (§2.2): the ntfy topic URL must be given to every owner
+#   and watcher, owners first. veille cannot see who subscribes; what it
+#   guarantees is that every alert also appears in the digest email, which
+#   always goes to owners and watchers together.
+# - Run one `veille run --once` at a time per store. A systemd timer for a
+#   single service unit never overlaps itself; avoid running two units
+#   against the same store_path.

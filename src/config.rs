@@ -25,7 +25,53 @@ pub struct Config {
     /// environment (PRP §8); only the model name lives here.
     #[serde(default)]
     pub llm: Option<LlmSection>,
+    /// Optional global SMTP transport for digest delivery. Credentials come
+    /// from the environment variables named here, never from this file.
+    #[serde(default)]
+    pub smtp: Option<SmtpSection>,
     pub tenants: Vec<TenantConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SmtpSection {
+    pub host: String,
+    #[serde(default = "default_smtp_port")]
+    pub port: u16,
+    pub from: String,
+    pub username_env: Option<String>,
+    pub password_env: Option<String>,
+}
+
+fn default_smtp_port() -> u16 {
+    587
+}
+
+/// One digest/alert recipient. §2.2: watchers and owners always receive the
+/// same deliveries; the role exists for validation and the audit trail, never
+/// for routing.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecipientConfig {
+    pub name: String,
+    /// "owner" or "watcher".
+    pub role: String,
+    pub email: String,
+}
+
+/// Per-tenant ntfy (or compatible) push endpoint. One shared topic per
+/// tenant: everyone who should see alerts subscribes to it, which makes push
+/// symmetry structural.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PushConfig {
+    pub url: String,
+    /// Env var holding a bearer token, when the ntfy server requires auth.
+    pub token_env: Option<String>,
+    /// Explicit opt-in for plaintext http push (internal networks only) —
+    /// the body is financial data and the token is a header.
+    #[serde(default)]
+    pub allow_http: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -48,7 +94,24 @@ pub struct TenantConfig {
     pub rules: RuleThresholds,
     /// Days each digest covers (default 7).
     pub digest_period_days: Option<u32>,
+    /// Weekday the digest is sent (default "sunday"). Matched in UTC.
+    pub digest_day: Option<String>,
+    /// Digest and alert recipients. Empty disables email delivery.
+    #[serde(default)]
+    pub recipients: Vec<RecipientConfig>,
+    /// Push endpoint for Alert-severity findings. Absent disables push.
+    pub push: Option<PushConfig>,
 }
+
+pub const WEEKDAYS: [&str; 7] = [
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+];
 
 /// Defaults are conservative: a tool that cries wolf gets muted, and a muted
 /// tool is a tool that missed the real thing (PRP §7).
@@ -121,6 +184,13 @@ impl Config {
             message,
         };
 
+        if let Some(smtp) = &self.smtp
+            && smtp.port == 465
+        {
+            return Err(invalid(
+                "smtp port 465 is implicit TLS; veille uses STARTTLS — use 587 (or 25)".into(),
+            ));
+        }
         if self.tenants.is_empty() {
             return Err(invalid("at least one [[tenants]] entry is required".into()));
         }
@@ -128,6 +198,7 @@ impl Config {
         let mut seen = std::collections::BTreeSet::new();
         let mut seen_base_urls = std::collections::BTreeSet::new();
         let mut seen_key_envs = std::collections::BTreeSet::new();
+        let mut seen_push_urls = std::collections::BTreeSet::new();
         for tenant in &self.tenants {
             if !is_valid_slug(&tenant.slug) {
                 return Err(invalid(format!(
@@ -159,6 +230,89 @@ impl Config {
                     "tenant {:?}: digest_period_days {days} must be between 1 and 366",
                     tenant.slug
                 )));
+            }
+            if let Some(day) = &tenant.digest_day
+                && !WEEKDAYS.contains(&day.to_lowercase().as_str())
+            {
+                return Err(invalid(format!(
+                    "tenant {:?}: digest_day {day:?} is not a weekday name",
+                    tenant.slug
+                )));
+            }
+            let mut has_owner = false;
+            let mut has_watcher = false;
+            let mut seen_emails = std::collections::BTreeSet::new();
+            for recipient in &tenant.recipients {
+                // One address, one person: a watcher's address doubling as
+                // the "owner" would satisfy role checks with no distinct
+                // owner destination.
+                if !seen_emails.insert(recipient.email.trim().to_lowercase()) {
+                    return Err(invalid(format!(
+                        "tenant {:?}: recipient email {:?} appears more than once",
+                        tenant.slug,
+                        recipient.email.trim().to_lowercase()
+                    )));
+                }
+                match recipient.role.as_str() {
+                    "owner" => has_owner = true,
+                    "watcher" => has_watcher = true,
+                    other => {
+                        return Err(invalid(format!(
+                            "tenant {:?}: recipient {:?} has unknown role {other:?}                              (use \"owner\" or \"watcher\")",
+                            tenant.slug, recipient.name
+                        )));
+                    }
+                }
+                // Validate with the same parser the SMTP transport uses, so a
+                // bad address fails at startup, not on digest day.
+                if recipient.email.parse::<lettre::message::Mailbox>().is_err() {
+                    return Err(invalid(format!(
+                        "tenant {:?}: recipient {:?} has an invalid email {:?}",
+                        tenant.slug, recipient.name, recipient.email
+                    )));
+                }
+            }
+            // §2.2 made structural: a watcher-only tenant is surveillance,
+            // not consented oversight, and cannot be configured.
+            if has_watcher && !has_owner {
+                return Err(invalid(format!(
+                    "tenant {:?} has watchers but no owner recipient — every delivery must reach the account owners (PRP §2.2)",
+                    tenant.slug
+                )));
+            }
+            if let Some(push) = &tenant.push {
+                let https = push.url.starts_with("https://");
+                let http = push.url.starts_with("http://");
+                if !(https || http) {
+                    return Err(invalid(format!(
+                        "tenant {:?}: push url must use http:// or https://",
+                        tenant.slug
+                    )));
+                }
+                if http && !push.allow_http {
+                    return Err(invalid(format!(
+                        "tenant {:?}: push url must use https (alerts carry financial data); set allow_http = true only for a trusted internal network",
+                        tenant.slug
+                    )));
+                }
+                // A topic shared between tenants would leak one household's
+                // alerts to another.
+                if !seen_push_urls.insert(push.url.trim().to_string()) {
+                    return Err(invalid(format!(
+                        "tenant {:?}: push url is already used by another tenant",
+                        tenant.slug
+                    )));
+                }
+                // The topic-subscription model cannot prove who subscribes.
+                // Requiring owner recipients guarantees the symmetric email
+                // channel carries every alert in the digest regardless of
+                // who follows the topic (§2.2).
+                if !has_owner {
+                    return Err(invalid(format!(
+                        "tenant {:?}: push requires at least one owner recipient — the digest is the channel that guarantees owners see every alert (PRP §2.2)",
+                        tenant.slug
+                    )));
+                }
             }
             let base_url = tenant.upstream.base_url.trim();
             if !(base_url.starts_with("http://") || base_url.starts_with("https://")) {

@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) as \"c: i64\" FROM delivery              WHERE tenant_id = ? AND channel = 'smtp' AND substr(sent_at, 1, 10) = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "c: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "69d84d2ef04065c26f800e1559e228dd16c387d598834489c96bb7cb5cdd7056"
+}
