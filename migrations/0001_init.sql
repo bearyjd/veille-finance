@@ -81,6 +81,7 @@ CREATE TABLE finding (
     evidence        TEXT NOT NULL,  -- JSON
     detected_at     TEXT NOT NULL,
     last_seen_at    TEXT NOT NULL,  -- refreshed when the same condition is re-detected
+    pushed_at       TEXT,           -- set when an Alert was successfully pushed; NULL = still owed a push
     dedupe_key      TEXT NOT NULL,
     acknowledged_at TEXT,
     UNIQUE (tenant_id, dedupe_key)

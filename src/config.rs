@@ -25,7 +25,49 @@ pub struct Config {
     /// environment (PRP §8); only the model name lives here.
     #[serde(default)]
     pub llm: Option<LlmSection>,
+    /// Optional global SMTP transport for digest delivery. Credentials come
+    /// from the environment variables named here, never from this file.
+    #[serde(default)]
+    pub smtp: Option<SmtpSection>,
     pub tenants: Vec<TenantConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SmtpSection {
+    pub host: String,
+    #[serde(default = "default_smtp_port")]
+    pub port: u16,
+    pub from: String,
+    pub username_env: Option<String>,
+    pub password_env: Option<String>,
+}
+
+fn default_smtp_port() -> u16 {
+    587
+}
+
+/// One digest/alert recipient. §2.2: watchers and owners always receive the
+/// same deliveries; the role exists for validation and the audit trail, never
+/// for routing.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecipientConfig {
+    pub name: String,
+    /// "owner" or "watcher".
+    pub role: String,
+    pub email: String,
+}
+
+/// Per-tenant ntfy (or compatible) push endpoint. One shared topic per
+/// tenant: everyone who should see alerts subscribes to it, which makes push
+/// symmetry structural.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PushConfig {
+    pub url: String,
+    /// Env var holding a bearer token, when the ntfy server requires auth.
+    pub token_env: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -48,7 +90,24 @@ pub struct TenantConfig {
     pub rules: RuleThresholds,
     /// Days each digest covers (default 7).
     pub digest_period_days: Option<u32>,
+    /// Weekday the digest is sent (default "sunday"). Matched in UTC.
+    pub digest_day: Option<String>,
+    /// Digest and alert recipients. Empty disables email delivery.
+    #[serde(default)]
+    pub recipients: Vec<RecipientConfig>,
+    /// Push endpoint for Alert-severity findings. Absent disables push.
+    pub push: Option<PushConfig>,
 }
+
+pub const WEEKDAYS: [&str; 7] = [
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+];
 
 /// Defaults are conservative: a tool that cries wolf gets muted, and a muted
 /// tool is a tool that missed the real thing (PRP §7).
@@ -157,6 +216,50 @@ impl Config {
             {
                 return Err(invalid(format!(
                     "tenant {:?}: digest_period_days {days} must be between 1 and 366",
+                    tenant.slug
+                )));
+            }
+            if let Some(day) = &tenant.digest_day
+                && !WEEKDAYS.contains(&day.to_lowercase().as_str())
+            {
+                return Err(invalid(format!(
+                    "tenant {:?}: digest_day {day:?} is not a weekday name",
+                    tenant.slug
+                )));
+            }
+            let mut has_owner = false;
+            let mut has_watcher = false;
+            for recipient in &tenant.recipients {
+                match recipient.role.as_str() {
+                    "owner" => has_owner = true,
+                    "watcher" => has_watcher = true,
+                    other => {
+                        return Err(invalid(format!(
+                            "tenant {:?}: recipient {:?} has unknown role {other:?}                              (use \"owner\" or \"watcher\")",
+                            tenant.slug, recipient.name
+                        )));
+                    }
+                }
+                if !recipient.email.contains('@') || recipient.email.trim().len() < 3 {
+                    return Err(invalid(format!(
+                        "tenant {:?}: recipient {:?} has an invalid email {:?}",
+                        tenant.slug, recipient.name, recipient.email
+                    )));
+                }
+            }
+            // §2.2 made structural: a watcher-only tenant is surveillance,
+            // not consented oversight, and cannot be configured.
+            if has_watcher && !has_owner {
+                return Err(invalid(format!(
+                    "tenant {:?} has watchers but no owner recipient — every                      delivery must reach the account owners (PRP §2.2)",
+                    tenant.slug
+                )));
+            }
+            if let Some(push) = &tenant.push
+                && !(push.url.starts_with("http://") || push.url.starts_with("https://"))
+            {
+                return Err(invalid(format!(
+                    "tenant {:?}: push url must use http:// or https://",
                     tenant.slug
                 )));
             }

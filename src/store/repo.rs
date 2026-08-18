@@ -36,6 +36,15 @@ pub struct StoredFinding {
     pub dedupe_key: String,
 }
 
+/// One delivery audit row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeliveryRow {
+    pub channel: String,
+    pub recipient: String,
+    pub finding_keys: Vec<String>,
+    pub sent_at: DateTime<Utc>,
+}
+
 /// One institution's health as recorded at the last sync.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredInstitutionHealth {
@@ -273,6 +282,130 @@ impl Store {
             ))
         });
         Ok(findings)
+    }
+
+    /// Alert-severity findings still owed a push: never pushed, not
+    /// acknowledged. Failed pushes stay here and retry on the next run.
+    pub async fn unpushed_alerts(&self, tenant: TenantId) -> Result<Vec<StoredFinding>> {
+        let rows = sqlx::query!(
+            "SELECT rule_id, severity, subject, summary, evidence, detected_at, \
+             last_seen_at, dedupe_key \
+             FROM finding \
+             WHERE tenant_id = ? AND severity = 'alert' AND pushed_at IS NULL \
+             AND acknowledged_at IS NULL \
+             ORDER BY detected_at, dedupe_key",
+            tenant.0
+        )
+        .fetch_all(self.pool())
+        .await?;
+        rows.into_iter()
+            .map(|r| {
+                Ok(StoredFinding {
+                    rule_id: r.rule_id,
+                    severity: r
+                        .severity
+                        .parse()
+                        .map_err(|e: String| corrupt("finding.severity", &e))?,
+                    subject: r.subject,
+                    summary: r.summary,
+                    evidence: serde_json::from_str(&r.evidence)
+                        .map_err(|e| corrupt("finding.evidence", &e))?,
+                    detected_at: DateTime::parse_from_rfc3339(&r.detected_at)
+                        .map_err(|e| corrupt("finding.detected_at", &e))?
+                        .with_timezone(&Utc),
+                    last_seen_at: DateTime::parse_from_rfc3339(&r.last_seen_at)
+                        .map_err(|e| corrupt("finding.last_seen_at", &e))?
+                        .with_timezone(&Utc),
+                    dedupe_key: r.dedupe_key,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn mark_pushed(
+        &self,
+        tenant: TenantId,
+        dedupe_key: &str,
+        at: DateTime<Utc>,
+    ) -> Result<()> {
+        let at = at.to_rfc3339();
+        sqlx::query!(
+            "UPDATE finding SET pushed_at = ? \
+             WHERE tenant_id = ? AND dedupe_key = ? AND pushed_at IS NULL",
+            at,
+            tenant.0,
+            dedupe_key,
+        )
+        .execute(self.pool())
+        .await?;
+        Ok(())
+    }
+
+    /// Append one audit row per (channel, recipient) send (PRP §6: every send
+    /// is recorded).
+    pub async fn record_delivery(
+        &self,
+        tenant: TenantId,
+        channel: &str,
+        recipient: &str,
+        finding_keys: &[String],
+        sent_at: DateTime<Utc>,
+    ) -> Result<()> {
+        let finding_ids = serde_json::to_string(finding_keys).unwrap_or_else(|_| "[]".to_string());
+        let sent_at = sent_at.to_rfc3339();
+        sqlx::query!(
+            "INSERT INTO delivery (tenant_id, channel, recipient, finding_ids, sent_at) \
+             VALUES (?, ?, ?, ?, ?)",
+            tenant.0,
+            channel,
+            recipient,
+            finding_ids,
+            sent_at,
+        )
+        .execute(self.pool())
+        .await?;
+        Ok(())
+    }
+
+    pub async fn deliveries(&self, tenant: TenantId) -> Result<Vec<DeliveryRow>> {
+        let rows = sqlx::query!(
+            "SELECT channel, recipient, finding_ids, sent_at \
+             FROM delivery WHERE tenant_id = ? ORDER BY sent_at, channel, recipient",
+            tenant.0
+        )
+        .fetch_all(self.pool())
+        .await?;
+        rows.into_iter()
+            .map(|r| {
+                Ok(DeliveryRow {
+                    channel: r.channel,
+                    recipient: r.recipient,
+                    finding_keys: serde_json::from_str(&r.finding_ids)
+                        .map_err(|e| corrupt("delivery.finding_ids", &e))?,
+                    sent_at: DateTime::parse_from_rfc3339(&r.sent_at)
+                        .map_err(|e| corrupt("delivery.sent_at", &e))?
+                        .with_timezone(&Utc),
+                })
+            })
+            .collect()
+    }
+
+    /// Whether an SMTP digest already went out for this tenant on this
+    /// calendar day (UTC) — a timer double-fire must not double-send.
+    pub async fn smtp_delivered_on(
+        &self,
+        tenant: TenantId,
+        day: chrono::NaiveDate,
+    ) -> Result<bool> {
+        let prefix = day.to_string();
+        let count = sqlx::query_scalar!(
+            r#"SELECT COUNT(*) as "c: i64" FROM delivery              WHERE tenant_id = ? AND channel = 'smtp' AND substr(sent_at, 1, 10) = ?"#,
+            tenant.0,
+            prefix,
+        )
+        .fetch_one(self.pool())
+        .await?;
+        Ok(count > 0)
     }
 
     pub async fn finding_count(&self, tenant: TenantId) -> Result<u64> {
