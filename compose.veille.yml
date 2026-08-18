@@ -1,0 +1,38 @@
+# veille compose overlay (PRP §4): merged onto the UNMODIFIED upstream Sure
+# compose file at runtime — never edit upstream's compose.yml.
+#
+#   docker compose -f compose.yml -f compose.veille.yml up -d      # Sure as usual
+#   docker compose -f compose.yml -f compose.veille.yml run --rm veille run --once
+#
+# veille joins Sure's internal network, reaches sure-web:3000, and publishes
+# no ports (PRP §2.6). Invocation comes from the host's systemd timer (see
+# docs/deployment.md) — there is no scheduler in the container.
+
+services:
+  veille:
+    build: .
+    # Or a published image, pinned by digest, once one exists.
+    profiles:
+      - veille   # never started by a plain `up`; only via `run --rm veille …`
+    volumes:
+      - veille-store:/var/lib/veille
+      - ./config/veille.toml:/etc/veille/veille.toml:ro
+    environment:
+      # Per-tenant read-scoped Sure API keys, named in config/veille.toml.
+      VEILLE_API_KEY_EXAMPLE: ${VEILLE_API_KEY_EXAMPLE:-}
+      # Optional narration + delivery credentials (see config/example.toml).
+      VEILLE_LLM_BASE_URL: ${VEILLE_LLM_BASE_URL:-}
+      VEILLE_LLM_API_KEY: ${VEILLE_LLM_API_KEY:-}
+      VEILLE_LLM_MODEL: ${VEILLE_LLM_MODEL:-}
+      VEILLE_SMTP_USERNAME: ${VEILLE_SMTP_USERNAME:-}
+      VEILLE_SMTP_PASSWORD: ${VEILLE_SMTP_PASSWORD:-}
+    command: ["--config", "/etc/veille/veille.toml", "run", "--once"]
+    networks:
+      - sure_net
+
+volumes:
+  veille-store:
+
+networks:
+  sure_net:
+    # Defined by upstream's compose.yml; the overlay only joins it.

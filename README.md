@@ -27,9 +27,17 @@ empirical study of Sure's API surface that this design rests on.
 
 ## Status
 
-Pre-1.0, under active development. Phase 1 (adapter + store + sync) and
-Phase 2 (rule engine, `veille evaluate`) implemented; narration and delivery
-(Phases 3–4) not yet started.
+v1 code complete: adapter + store + idempotent sync, the six-rule engine,
+`veille evaluate`/`digest` with optional LLM narration, and delivery
+(ntfy push for alerts, SMTP digests) behind the symmetric-visibility
+invariant. See `docs/deployment.md` to run it.
+
+```
+veille sync      [--tenant <slug>] [--full]      pull and materialize
+veille evaluate  [--tenant <slug>] --dry-run     run rules, print findings
+veille digest    [--tenant <slug>] [--html]      render the digest to stdout
+veille run --once                                sync + evaluate + deliver
+```
 
 ## License
 
