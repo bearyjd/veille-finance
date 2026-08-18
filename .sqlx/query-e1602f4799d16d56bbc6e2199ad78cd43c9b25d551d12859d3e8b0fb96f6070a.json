@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT MAX(sent_at) as \"d?: String\" FROM delivery              WHERE tenant_id = ? AND channel = 'smtp'",
+  "describe": {
+    "columns": [
+      {
+        "name": "d?: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "e1602f4799d16d56bbc6e2199ad78cd43c9b25d551d12859d3e8b0fb96f6070a"
+}

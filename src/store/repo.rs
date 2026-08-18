@@ -376,7 +376,8 @@ impl Store {
         finding_keys: &[String],
         sent_at: DateTime<Utc>,
     ) -> Result<()> {
-        let finding_ids = serde_json::to_string(finding_keys).unwrap_or_else(|_| "[]".to_string());
+        let finding_ids =
+            serde_json::to_string(finding_keys).map_err(|e| corrupt("delivery.finding_ids", &e))?;
         let sent_at = sent_at.to_rfc3339();
         let mut tx = self.pool().begin().await?;
         for recipient in recipients {
@@ -416,6 +417,69 @@ impl Store {
                 })
             })
             .collect()
+    }
+
+    /// When the most recent SMTP digest went out, if ever — the next digest's
+    /// coverage window extends back to it so no findings can fall in a gap.
+    pub async fn last_smtp_delivery_at(&self, tenant: TenantId) -> Result<Option<DateTime<Utc>>> {
+        let row = sqlx::query_scalar!(
+            r#"SELECT MAX(sent_at) as "d?: String" FROM delivery              WHERE tenant_id = ? AND channel = 'smtp'"#,
+            tenant.0
+        )
+        .fetch_one(self.pool())
+        .await?;
+        row.map(|d| {
+            DateTime::parse_from_rfc3339(&d)
+                .map(|dt| dt.with_timezone(&Utc))
+                .map_err(|e| corrupt("delivery.sent_at", &e))
+        })
+        .transpose()
+    }
+
+    /// Claim and audit a batch of pushed alerts in one transaction (used for
+    /// the capped-volume summary push covering many findings at once).
+    /// Returns the dedupe keys actually claimed by this run.
+    pub async fn record_push_batch(
+        &self,
+        tenant: TenantId,
+        dedupe_keys: &[String],
+        destination: &str,
+        at: DateTime<Utc>,
+    ) -> Result<Vec<String>> {
+        let at = at.to_rfc3339();
+        let mut tx = self.pool().begin().await?;
+        let mut claimed = Vec::new();
+        for key in dedupe_keys {
+            let rows = sqlx::query!(
+                "UPDATE finding SET pushed_at = ?                  WHERE tenant_id = ? AND dedupe_key = ? AND pushed_at IS NULL",
+                at,
+                tenant.0,
+                key,
+            )
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+            if rows == 1 {
+                claimed.push(key.clone());
+            }
+        }
+        if claimed.is_empty() {
+            tx.rollback().await?;
+            return Ok(claimed);
+        }
+        let finding_ids =
+            serde_json::to_string(&claimed).map_err(|e| corrupt("delivery.finding_ids", &e))?;
+        sqlx::query!(
+            "INSERT INTO delivery (tenant_id, channel, recipient, finding_ids, sent_at)              VALUES (?, 'push', ?, ?, ?)",
+            tenant.0,
+            destination,
+            finding_ids,
+            at,
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(claimed)
     }
 
     /// Whether an SMTP digest already went out for this tenant on this

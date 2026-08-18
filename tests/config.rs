@@ -369,3 +369,75 @@ email = "mom@example.com"
     ));
     Config::load(f.path()).expect("explicit opt-in allows internal http");
 }
+
+#[test]
+fn two_tenants_cannot_share_a_push_topic() {
+    let f = write_config(
+        r#"
+store_path = "/tmp/v.sqlite3"
+[[tenants]]
+slug = "jd"
+display_name = "Self"
+[tenants.upstream]
+base_url = "http://a:3000"
+api_key_env = "K1"
+[[tenants.recipients]]
+name = "JD"
+role = "owner"
+email = "jd@example.com"
+[tenants.push]
+url = "https://ntfy.example/shared-topic"
+[[tenants]]
+slug = "parents"
+display_name = "Parents"
+[tenants.upstream]
+base_url = "http://b:3000"
+api_key_env = "K2"
+[[tenants.recipients]]
+name = "Mom"
+role = "owner"
+email = "mom@example.com"
+[tenants.push]
+url = "https://ntfy.example/shared-topic"
+"#,
+    );
+    let err = Config::load(f.path()).expect_err("shared push topic must fail");
+    assert!(err.to_string().contains("push"), "{err}");
+}
+
+#[test]
+fn recipient_addresses_must_parse_as_mailboxes_at_load_time() {
+    let f = write_config(&format!(
+        r#"{RECIPIENT_TENANT_HEADER}
+[[tenants.recipients]]
+name = "Broken"
+role = "owner"
+email = "no space allowed@@example"
+"#
+    ));
+    assert!(
+        Config::load(f.path()).is_err(),
+        "an address that would fail at send time must fail at load time"
+    );
+}
+
+#[test]
+fn implicit_tls_smtp_port_is_rejected() {
+    let f = write_config(
+        r#"
+store_path = "/tmp/v.sqlite3"
+[smtp]
+host = "smtp.example.com"
+port = 465
+from = "veille@example.com"
+[[tenants]]
+slug = "jd"
+display_name = "Self"
+[tenants.upstream]
+base_url = "http://a:3000"
+api_key_env = "K"
+"#,
+    );
+    let err = Config::load(f.path()).expect_err("port 465 is implicit TLS, not STARTTLS");
+    assert!(err.to_string().contains("465"), "{err}");
+}

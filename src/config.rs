@@ -184,6 +184,13 @@ impl Config {
             message,
         };
 
+        if let Some(smtp) = &self.smtp
+            && smtp.port == 465
+        {
+            return Err(invalid(
+                "smtp port 465 is implicit TLS; veille uses STARTTLS — use 587 (or 25)".into(),
+            ));
+        }
         if self.tenants.is_empty() {
             return Err(invalid("at least one [[tenants]] entry is required".into()));
         }
@@ -191,6 +198,7 @@ impl Config {
         let mut seen = std::collections::BTreeSet::new();
         let mut seen_base_urls = std::collections::BTreeSet::new();
         let mut seen_key_envs = std::collections::BTreeSet::new();
+        let mut seen_push_urls = std::collections::BTreeSet::new();
         for tenant in &self.tenants {
             if !is_valid_slug(&tenant.slug) {
                 return Err(invalid(format!(
@@ -255,7 +263,9 @@ impl Config {
                         )));
                     }
                 }
-                if !recipient.email.contains('@') || recipient.email.trim().len() < 3 {
+                // Validate with the same parser the SMTP transport uses, so a
+                // bad address fails at startup, not on digest day.
+                if recipient.email.parse::<lettre::message::Mailbox>().is_err() {
                     return Err(invalid(format!(
                         "tenant {:?}: recipient {:?} has an invalid email {:?}",
                         tenant.slug, recipient.name, recipient.email
@@ -266,7 +276,7 @@ impl Config {
             // not consented oversight, and cannot be configured.
             if has_watcher && !has_owner {
                 return Err(invalid(format!(
-                    "tenant {:?} has watchers but no owner recipient — every                      delivery must reach the account owners (PRP §2.2)",
+                    "tenant {:?} has watchers but no owner recipient — every delivery must reach the account owners (PRP §2.2)",
                     tenant.slug
                 )));
             }
@@ -281,7 +291,15 @@ impl Config {
                 }
                 if http && !push.allow_http {
                     return Err(invalid(format!(
-                        "tenant {:?}: push url must use https (alerts carry financial                          data); set allow_http = true only for a trusted internal network",
+                        "tenant {:?}: push url must use https (alerts carry financial data); set allow_http = true only for a trusted internal network",
+                        tenant.slug
+                    )));
+                }
+                // A topic shared between tenants would leak one household's
+                // alerts to another.
+                if !seen_push_urls.insert(push.url.trim().to_string()) {
+                    return Err(invalid(format!(
+                        "tenant {:?}: push url is already used by another tenant",
                         tenant.slug
                     )));
                 }
@@ -291,7 +309,7 @@ impl Config {
                 // who follows the topic (§2.2).
                 if !has_owner {
                     return Err(invalid(format!(
-                        "tenant {:?}: push requires at least one owner recipient —                          the digest is the channel that guarantees owners see every                          alert (PRP §2.2)",
+                        "tenant {:?}: push requires at least one owner recipient — the digest is the channel that guarantees owners see every alert (PRP §2.2)",
                         tenant.slug
                     )));
                 }

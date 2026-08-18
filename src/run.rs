@@ -16,6 +16,11 @@ use crate::sync::{SyncError, SyncOptions, sync_tenant};
 
 const DEFAULT_DIGEST_DAY: &str = "sunday";
 const DEFAULT_DIGEST_PERIOD_DAYS: u32 = 7;
+/// At most this many detailed pushes per run; a backlog beyond it is covered
+/// by one summary push (and, always, by the digest).
+const MAX_PUSHES_PER_RUN: usize = 10;
+/// "All history" for a tenant's first-ever digest.
+const FIRST_DIGEST_PERIOD_DAYS: u32 = 3650;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RunError {
@@ -85,10 +90,20 @@ pub async fn run_tenant_once(
 
     // Immediate channel: Alert severity only (PRP §9). A failed push stays
     // owed and retries next run; it never blocks the rest of the cycle.
+    // Volume is capped: a backlog (first backfill, outage recovery, rule
+    // retuning) sends at most MAX_PUSHES_PER_RUN detailed pushes plus one
+    // summary covering the rest — full detail is always in the digest.
     if let Some(push) = push {
-        for finding in store.unpushed_alerts(tenant).await? {
-            // ASCII title: header values travel through proxies unmangled.
-            let title = format!("{} - veille alert", tenant_config.display_name);
+        // ASCII title: header values travel through proxies unmangled.
+        let title: String = format!("{} - veille alert", tenant_config.display_name)
+            .chars()
+            .map(|c| if c.is_ascii() { c } else { '?' })
+            .collect();
+        let owed = store.unpushed_alerts(tenant).await?;
+        let (detailed, remainder) = owed.split_at(owed.len().min(MAX_PUSHES_PER_RUN));
+
+        let mut channel_healthy = true;
+        for finding in detailed {
             match push.send(&title, &finding.summary).await {
                 Ok(()) => {
                     // Atomic claim + audit; false means another run recorded
@@ -101,15 +116,42 @@ pub async fn run_tenant_once(
                     }
                 }
                 Err(reason) => {
+                    // First failure = unhealthy endpoint (or rate limit):
+                    // stop pushing this run; everything unsent stays owed.
                     tracing::warn!(
                         tenant = ?tenant,
                         dedupe_key = %finding.dedupe_key,
                         %reason,
-                        "alert push failed; will retry next run"
+                        "alert push failed; remaining alerts stay owed for next run"
                     );
                     outcome
                         .delivery_failures
                         .push(format!("push {}: {reason}", finding.dedupe_key));
+                    channel_healthy = false;
+                    break;
+                }
+            }
+        }
+
+        if channel_healthy && !remainder.is_empty() {
+            let body = format!(
+                "{} more alerts also fired; full details are in the digest.",
+                remainder.len()
+            );
+            match push.send(&title, &body).await {
+                Ok(()) => {
+                    let keys: Vec<String> =
+                        remainder.iter().map(|f| f.dedupe_key.clone()).collect();
+                    let claimed = store
+                        .record_push_batch(tenant, &keys, &push.destination(), now)
+                        .await?;
+                    outcome.alerts_pushed += claimed.len();
+                }
+                Err(reason) => {
+                    tracing::warn!(tenant = ?tenant, %reason, "summary push failed");
+                    outcome
+                        .delivery_failures
+                        .push(format!("push summary: {reason}"));
                 }
             }
         }
@@ -127,9 +169,20 @@ pub async fn run_tenant_once(
         && !tenant_config.recipients.is_empty()
         && !store.smtp_delivered_on(tenant, now.date_naive()).await?
     {
-        let period_days = tenant_config
+        // The coverage window is structural, not purely configured: it always
+        // extends back to the last recorded digest (all history for the
+        // first), so no digest_period_days / digest_day combination can open
+        // a gap that hides a pushed alert from the owners (§2.2).
+        let configured_days = tenant_config
             .digest_period_days
             .unwrap_or(DEFAULT_DIGEST_PERIOD_DAYS);
+        let period_days = match store.last_smtp_delivery_at(tenant).await? {
+            Some(last) => {
+                let gap_days = (now.date_naive() - last.date_naive()).num_days().max(0) as u32 + 1;
+                configured_days.max(gap_days).min(FIRST_DIGEST_PERIOD_DAYS)
+            }
+            None => FIRST_DIGEST_PERIOD_DAYS,
+        };
         let mut input =
             build_digest_input(store, tenant, &tenant_config.display_name, period_days, now)
                 .await?;

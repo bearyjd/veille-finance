@@ -176,7 +176,7 @@ async fn digest_email_reaches_owners_and_watchers_in_one_send() {
 }
 
 #[tokio::test]
-async fn watcher_delivery_never_happens_without_owner_delivery() {
+async fn watcher_digest_rows_always_have_matching_owner_rows() {
     // The structural half of the gate: however findings and channels are
     // arranged, a watcher row in the audit trail implies owner rows with the
     // same finding set in the same cycle.
@@ -517,4 +517,195 @@ async fn failed_digest_sends_write_no_audit_rows_and_are_reported() {
         rows.iter().all(|r| r.channel != "smtp"),
         "no audit rows for a send that did not happen"
     );
+}
+
+#[tokio::test]
+async fn no_digest_window_configuration_can_hide_a_pushed_alert_from_owners() {
+    // The window-gap attack: period 1 day, digest on Sunday. An alert seen
+    // only on Tuesday must still appear in the next digest, because the
+    // window extends to the last recorded digest (all history for the first).
+    let dir = TempDir::new().expect("tempdir");
+    let (store, tenant) = fresh_store(&dir).await;
+    let push = FakePush::default();
+    let email = FakeEmail::default();
+
+    let mut config = tenant_config(Some("sunday"));
+    config.digest_period_days = Some(1);
+
+    // Tuesday 2026-08-25 (10 days after the fixture's last successful sync):
+    // the alert fires and is pushed. No digest due.
+    let tuesday = Utc
+        .with_ymd_and_hms(2026, 8, 25, 22, 0, 0)
+        .single()
+        .expect("ts");
+    run_tenant_once(
+        &store,
+        tenant,
+        &config,
+        &fixture_source(),
+        Some(&push),
+        Some(&email),
+        tuesday,
+        RunOptions::default(),
+    )
+    .await
+    .expect("tuesday run");
+    assert_eq!(
+        push.sent.lock().expect("lock").len(),
+        1,
+        "alert pushed on Tuesday"
+    );
+    assert!(email.sent.lock().expect("lock").is_empty());
+
+    // Sunday 2026-08-30: first-ever digest. The Tuesday alert must be in it.
+    let sunday = Utc
+        .with_ymd_and_hms(2026, 8, 30, 22, 0, 0)
+        .single()
+        .expect("ts");
+    run_tenant_once(
+        &store,
+        tenant,
+        &config,
+        &fixture_source(),
+        Some(&push),
+        Some(&email),
+        sunday,
+        RunOptions::default(),
+    )
+    .await
+    .expect("sunday run");
+
+    {
+        let sent = email.sent.lock().expect("lock");
+        assert_eq!(sent.len(), 1, "digest went out");
+    }
+    let rows = store.deliveries(tenant).await.expect("rows");
+    let owner_row = rows
+        .iter()
+        .find(|r| r.channel == "smtp" && r.recipient == "mom@example.com")
+        .expect("owner digest row");
+    assert!(
+        owner_row
+            .finding_keys
+            .iter()
+            .any(|k| k.starts_with("sync-stale")),
+        "§2.2: the pushed alert must reach the owners' digest regardless of \
+         the configured window: {owner_row:?}"
+    );
+}
+
+#[tokio::test]
+async fn push_volume_is_capped_with_a_summary_covering_the_rest() {
+    let dir = TempDir::new().expect("tempdir");
+    let (store, tenant) = fresh_store(&dir).await;
+    let push = FakePush::default();
+    let email = FakeEmail::default();
+    let now = eval_now();
+    let config = tenant_config(Some("monday"));
+
+    // A backlog of 14 owed alerts.
+    let findings: Vec<veille::domain::Finding> = (0..14)
+        .map(|i| veille::domain::Finding {
+            rule_id: "large-transfer".into(),
+            severity: veille::domain::Severity::Alert,
+            subject: format!("account:a{i}"),
+            summary: format!("Large transaction number {i}."),
+            evidence: serde_json::json!({}),
+            dedupe_key: format!("large-transfer:backlog-{i:02}"),
+            detected_at: now,
+        })
+        .collect();
+    store
+        .upsert_findings(tenant, &findings)
+        .await
+        .expect("seed");
+
+    run_tenant_once(
+        &store,
+        tenant,
+        &config,
+        &fixture_source(),
+        Some(&push),
+        Some(&email),
+        now,
+        RunOptions::default(),
+    )
+    .await
+    .expect("run");
+
+    {
+        let sent = push.sent.lock().expect("lock");
+        assert!(
+            sent.len() <= 11,
+            "at most the cap plus one summary push, got {}",
+            sent.len()
+        );
+        let summary = &sent[sent.len() - 1].1;
+        assert!(
+            summary.contains("more alert"),
+            "the tail is summarized, not dropped: {summary}"
+        );
+    }
+
+    // Every owed alert is accounted for: nothing left unpushed.
+    let rows = store.deliveries(tenant).await.expect("rows");
+    let pushed_keys: std::collections::BTreeSet<String> = rows
+        .iter()
+        .filter(|r| r.channel == "push")
+        .flat_map(|r| r.finding_keys.iter().cloned())
+        .collect();
+    for finding in &findings {
+        assert!(
+            pushed_keys.contains(&finding.dedupe_key),
+            "{} must be covered by a detailed or summary push",
+            finding.dedupe_key
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_push_audit_row_implies_owner_digest_rows_for_the_same_findings() {
+    // The gate, extended to the channel the audit-trail test was blind to:
+    // any pushed finding must appear in every owner's digest row once a
+    // digest goes out.
+    let dir = TempDir::new().expect("tempdir");
+    let (store, tenant) = fresh_store(&dir).await;
+    let push = FakePush::default();
+    let email = FakeEmail::default();
+    let now = eval_now();
+    let config = tenant_config(Some(weekday_name(now)));
+
+    run_tenant_once(
+        &store,
+        tenant,
+        &config,
+        &fixture_source(),
+        Some(&push),
+        Some(&email),
+        now,
+        RunOptions::default(),
+    )
+    .await
+    .expect("run");
+
+    let rows = store.deliveries(tenant).await.expect("rows");
+    let push_keys: Vec<&String> = rows
+        .iter()
+        .filter(|r| r.channel == "push")
+        .flat_map(|r| r.finding_keys.iter())
+        .collect();
+    assert!(!push_keys.is_empty(), "the alert was pushed");
+    for owner in ["mom@example.com", "dad@example.com"] {
+        let owner_keys: std::collections::BTreeSet<&String> = rows
+            .iter()
+            .filter(|r| r.channel == "smtp" && r.recipient == owner)
+            .flat_map(|r| r.finding_keys.iter())
+            .collect();
+        for key in &push_keys {
+            assert!(
+                owner_keys.contains(key),
+                "pushed finding {key} missing from {owner}'s digest row"
+            );
+        }
+    }
 }
