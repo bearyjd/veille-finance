@@ -1,0 +1,53 @@
+{
+    "balances": [
+        {
+            "id": "489817cb-fa88-4dbc-9f59-0befbeb6bc56",
+            "date": "2026-08-18",
+            "currency": "USD",
+            "flows_factor": 1,
+            "balance": "$18,000.00",
+            "balance_cents": 1800000,
+            "cash_balance": "$0.00",
+            "cash_balance_cents": 0,
+            "start_cash_balance": "$0.00",
+            "start_cash_balance_cents": 0,
+            "start_non_cash_balance": "$0.00",
+            "start_non_cash_balance_cents": 0,
+            "start_balance": "$0.00",
+            "start_balance_cents": 0,
+            "cash_inflows": "$0.00",
+            "cash_inflows_cents": 0,
+            "cash_outflows": "$0.00",
+            "cash_outflows_cents": 0,
+            "non_cash_inflows": "$0.00",
+            "non_cash_inflows_cents": 0,
+            "non_cash_outflows": "$0.00",
+            "non_cash_outflows_cents": 0,
+            "net_market_flows": "$0.00",
+            "net_market_flows_cents": 0,
+            "cash_adjustments": "$0.00",
+            "cash_adjustments_cents": 0,
+            "non_cash_adjustments": "$18,000.00",
+            "non_cash_adjustments_cents": 1800000,
+            "end_cash_balance": "$0.00",
+            "end_cash_balance_cents": 0,
+            "end_non_cash_balance": "$18,000.00",
+            "end_non_cash_balance_cents": 1800000,
+            "end_balance": "$18,000.00",
+            "end_balance_cents": 1800000,
+            "account": {
+                "id": "af931d31-48f5-4c2c-aa79-7aab6c39af05",
+                "name": "2016 Honda Accord",
+                "account_type": "vehicle"
+            },
+            "created_at": "2026-08-18T15:23:19Z",
+            "updated_at": "2026-08-18T15:23:19Z"
+        }
+    ],
+    "pagination": {
+        "page": 1,
+        "per_page": 3,
+        "total_count": 1,
+        "total_pages": 1
+    }
+}

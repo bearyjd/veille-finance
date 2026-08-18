@@ -1,0 +1,17 @@
+# Private deployment context — never commit (see deployment-notes.md header)
+deployment-notes.md
+docs/private/
+.env
+.env.*
+!.env.example
+config/*.toml
+!config/example.toml
+
+# Build artifacts
+target/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+
+# Phase 0 test rig runtime state
+phase0/**/.env

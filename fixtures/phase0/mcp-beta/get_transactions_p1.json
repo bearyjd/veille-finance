@@ -1,0 +1,12 @@
+{
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {
+        "content": [
+            {
+                "type": "text",
+                "text": "{\"transactions\":[{\"name\":\"BETA-CANARY-DEPOSIT\",\"date\":\"2026-08-15\",\"amount\":\"1234.56\",\"currency\":\"USD\",\"formatted_amount\":\"$1,234.56\",\"classification\":\"income\",\"account\":\"BETA-CANARY-CHECKING\",\"category\":null,\"merchant\":null,\"tags\":[],\"is_transfer\":false}],\"total_results\":1,\"page\":1,\"page_size\":50,\"total_pages\":1,\"total_income\":\"$1,234.56\",\"total_expenses\":\"$0.00\"}"
+            }
+        ]
+    }
+}

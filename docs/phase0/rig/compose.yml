@@ -1,0 +1,88 @@
+# Phase 0 test rig — throwaway Sure instance for the MCP family-scoping experiment.
+# Derived from upstream compose.example.yml (ghcr.io/we-promise/sure:stable).
+# NOT a deployment artifact. Secrets here are throwaway values for a localhost rig.
+
+x-db-env: &db_env
+  POSTGRES_USER: sure_user
+  POSTGRES_PASSWORD: phase0_throwaway_pw
+  POSTGRES_DB: sure_production
+
+x-rails-env: &rails_env
+  <<: *db_env
+  SECRET_KEY_BASE: 71b8a5f8d1e0a29c4c3f2c1b8e6d5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6
+  SELF_HOSTED: "true"
+  RAILS_FORCE_SSL: "false"
+  RAILS_ASSUME_SSL: "false"
+  DB_HOST: db
+  DB_PORT: 5432
+  REDIS_URL: redis://redis:6379/1
+  # The variables under test (§3 of the PRP):
+  MCP_API_TOKEN: phase0-mcp-token-family-a
+  MCP_USER_EMAIL: alpha.owner@phase0.test
+
+services:
+  web:
+    image: ghcr.io/we-promise/sure:stable
+    volumes:
+      - app-storage:/rails/storage
+    ports:
+      - "127.0.0.1:3210:3000"
+    environment:
+      <<: *rails_env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - sure_net
+
+  worker:
+    image: ghcr.io/we-promise/sure:stable
+    command: bundle exec sidekiq
+    volumes:
+      - app-storage:/rails/storage
+    environment:
+      <<: *rails_env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - sure_net
+
+  db:
+    image: docker.io/library/postgres:16
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    environment:
+      <<: *db_env
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - sure_net
+
+  redis:
+    image: docker.io/library/redis:7
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - sure_net
+
+volumes:
+  app-storage:
+  postgres-data:
+  redis-data:
+
+networks:
+  sure_net:
+    driver: bridge

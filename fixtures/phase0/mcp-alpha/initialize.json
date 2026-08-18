@@ -1,0 +1,14 @@
+{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+        "protocolVersion": "2025-03-26",
+        "capabilities": {
+            "tools": {}
+        },
+        "serverInfo": {
+            "name": "sure",
+            "version": "1.0"
+        }
+    }
+}

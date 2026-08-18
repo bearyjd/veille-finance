@@ -1,0 +1,12 @@
+{
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+        "content": [
+            {
+                "type": "text",
+                "text": "{\"as_of_date\":\"2026-08-18\",\"accounts\":[{\"name\":\"BETA-CANARY-CHECKING\",\"balance\":\"4242.42\",\"currency\":\"USD\",\"balance_formatted\":\"$4,242.42\",\"classification\":\"asset\",\"type\":\"Depository\",\"start_date\":\"2026-08-14\",\"is_linked\":false,\"provider\":null,\"status\":\"active\",\"historical_balances\":{\"start_date\":\"2026-08-14\",\"end_date\":\"2026-08-18\",\"interval\":\"1 month\",\"values\":[\"$0.00\",\"$0.00\"]}}]}"
+            }
+        ]
+    }
+}

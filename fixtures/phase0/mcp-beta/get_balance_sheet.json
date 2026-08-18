@@ -1,0 +1,12 @@
+{
+    "jsonrpc": "2.0",
+    "id": 6,
+    "result": {
+        "content": [
+            {
+                "type": "text",
+                "text": "{\"as_of_date\":\"2026-08-18\",\"oldest_account_start_date\":\"2026-08-15\",\"currency\":\"USD\",\"net_worth\":{\"current\":\"$4,242.42\",\"monthly_history\":{\"start_date\":\"2026-08-15\",\"end_date\":\"2026-08-18\",\"interval\":\"1 month\",\"values\":[\"$0.00\",\"$0.00\"]}},\"assets\":{\"current\":\"$4,242.42\",\"monthly_history\":{\"start_date\":\"2026-08-15\",\"end_date\":\"2026-08-18\",\"interval\":\"1 month\",\"values\":[\"$0.00\",\"$0.00\"]}},\"liabilities\":{\"current\":\"$0.00\",\"monthly_history\":{\"start_date\":\"2026-08-15\",\"end_date\":\"2026-08-18\",\"interval\":\"1 month\",\"values\":[\"$0.00\",\"$0.00\"]}},\"insights\":{\"debt_to_asset_ratio\":\"0%\"}}"
+            }
+        ]
+    }
+}

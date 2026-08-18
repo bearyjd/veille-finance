@@ -1,0 +1,76 @@
+{
+    "transactions": [
+        {
+            "id": "09746507-7a03-4dab-a253-68dcbb4a9cde",
+            "date": "2026-09-05",
+            "amount": "-$827.00",
+            "amount_cents": 82700,
+            "signed_amount_cents": 82700,
+            "currency": "USD",
+            "name": "Sapphire Payment",
+            "notes": null,
+            "external_id": null,
+            "source": null,
+            "classification": "income",
+            "account": {
+                "id": "5bda6c0b-d1c8-4118-8cf6-04938de123ca",
+                "name": "Chase Sapphire Reserve",
+                "account_type": "credit_card"
+            },
+            "category": null,
+            "merchant": null,
+            "tags": [],
+            "transfer": {
+                "id": "987bc9e5-d8ae-4e40-8b0a-fd2b050df455",
+                "amount": "$827.00",
+                "currency": "USD",
+                "other_account": {
+                    "id": "8db2d3a5-8db0-4c4c-acb9-b2edf5f1068d",
+                    "name": "Chase Premier Checking",
+                    "account_type": "depository"
+                }
+            },
+            "created_at": "2026-08-18T15:22:59Z",
+            "updated_at": "2026-08-18T15:22:59Z"
+        },
+        {
+            "id": "15dc6fa3-cfe1-4d4c-94b0-2eade53255ff",
+            "date": "2026-09-05",
+            "amount": "$827.00",
+            "amount_cents": 82700,
+            "signed_amount_cents": -82700,
+            "currency": "USD",
+            "name": "Sapphire Payment",
+            "notes": null,
+            "external_id": null,
+            "source": null,
+            "classification": "expense",
+            "account": {
+                "id": "8db2d3a5-8db0-4c4c-acb9-b2edf5f1068d",
+                "name": "Chase Premier Checking",
+                "account_type": "depository"
+            },
+            "category": null,
+            "merchant": null,
+            "tags": [],
+            "transfer": {
+                "id": "987bc9e5-d8ae-4e40-8b0a-fd2b050df455",
+                "amount": "$827.00",
+                "currency": "USD",
+                "other_account": {
+                    "id": "5bda6c0b-d1c8-4118-8cf6-04938de123ca",
+                    "name": "Chase Sapphire Reserve",
+                    "account_type": "credit_card"
+                }
+            },
+            "created_at": "2026-08-18T15:22:59Z",
+            "updated_at": "2026-08-18T15:22:59Z"
+        }
+    ],
+    "pagination": {
+        "page": 1,
+        "per_page": 2,
+        "total_count": 7544,
+        "total_pages": 3772
+    }
+}

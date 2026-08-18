@@ -1,0 +1,54 @@
+{
+    "holdings": [
+        {
+            "id": "c8e9b11b-5452-4f84-9291-7db7b30d3d17",
+            "date": "2023-08-01",
+            "qty": "3.21",
+            "price": "$134.00",
+            "amount": "$430.14",
+            "currency": "USD",
+            "cost_basis_source": "calculated",
+            "account": {
+                "id": "62fe6cc7-058e-4932-b748-f0604a69ff48",
+                "name": "Charles Schwab Brokerage",
+                "account_type": "investment"
+            },
+            "security": {
+                "id": "6813d25f-17c1-4e37-b35a-0a5b6bcd87a0",
+                "ticker": "VXUS",
+                "name": "Vanguard Total International Stock ETF"
+            },
+            "avg_cost": "$134.00",
+            "created_at": "2026-08-18T15:23:17Z",
+            "updated_at": "2026-08-18T15:23:18Z"
+        },
+        {
+            "id": "8c6175da-1844-4639-9dae-ddc2091fed27",
+            "date": "2023-08-01",
+            "qty": "1.73",
+            "price": "\u00a377.00",
+            "amount": "\u00a3133.21",
+            "currency": "GBP",
+            "cost_basis_source": "calculated",
+            "account": {
+                "id": "7b147fa5-678a-49c7-9fc2-ae21529b69f3",
+                "name": "Vanguard UK ISA",
+                "account_type": "investment"
+            },
+            "security": {
+                "id": "6813d25f-17c1-4e37-b35a-0a5b6bcd87a0",
+                "ticker": "VXUS",
+                "name": "Vanguard Total International Stock ETF"
+            },
+            "avg_cost": "\u00a377.00",
+            "created_at": "2026-08-18T15:23:18Z",
+            "updated_at": "2026-08-18T15:23:18Z"
+        }
+    ],
+    "pagination": {
+        "page": 1,
+        "per_page": 2,
+        "total_count": 3342,
+        "total_pages": 1671
+    }
+}

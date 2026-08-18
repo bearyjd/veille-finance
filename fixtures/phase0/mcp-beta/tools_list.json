@@ -1,0 +1,401 @@
+{
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+        "tools": [
+            {
+                "name": "get_transactions",
+                "description": "Use this to search user's transactions by using various optional filters.\n\nThis function is great for things like:\n- Finding specific transactions\n- Getting basic stats about a small group of transactions\n\nThis function is not great for:\n- Large time periods (use the get_income_statement function for this)\n\nNote on pagination:\n\nThis function can be paginated.  You can expect the following properties in the response:\n\n- `total_pages`: The total number of pages of results\n- `page`: The current page of results\n- `page_size`: The number of results per page (this will always be 50)\n- `total_results`: The total number of results for the given filters\n- `total_income`: The total income for the given filters\n- `total_expenses`: The total expenses for the given filters\n\nSimple example (transactions from the last 30 days):\n\n```\nget_transactions({\n  page: 1,\n  start_date: \"2026-07-19\",\n  end_date: \"2026-08-18\"\n})\n```\n\nMore complex example (various filters):\n\n```\nget_transactions({\n  page: 1,\n  search: \"mcdonalds\",\n  accounts: [\"Checking\", \"Savings\"],\n  start_date: \"2026-07-19\",\n  end_date: \"2026-08-18\",\n  categories: [\"Restaurants\"],\n  merchants: [\"McDonald's\"],\n  tags: [\"Food\"],\n  amount: \"100\",\n  amount_operator: \"less\"\n})\n```\n",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "page": {
+                            "type": "integer",
+                            "description": "Page number"
+                        },
+                        "order": {
+                            "enum": [
+                                "asc",
+                                "desc"
+                            ],
+                            "description": "Order of the transactions by date"
+                        },
+                        "search": {
+                            "type": "string",
+                            "description": "Search for transactions by name"
+                        },
+                        "amount": {
+                            "type": "string",
+                            "description": "Amount for transactions (must be used with amount_operator)"
+                        },
+                        "amount_operator": {
+                            "type": "string",
+                            "description": "Operator for amount (must be used with amount)",
+                            "enum": [
+                                "equal",
+                                "less",
+                                "greater"
+                            ]
+                        },
+                        "start_date": {
+                            "type": "string",
+                            "description": "Start date for transactions in YYYY-MM-DD format"
+                        },
+                        "end_date": {
+                            "type": "string",
+                            "description": "End date for transactions in YYYY-MM-DD format"
+                        },
+                        "accounts": {
+                            "type": "array",
+                            "description": "Filter transactions by account name",
+                            "items": {
+                                "enum": [
+                                    "BETA-CANARY-CHECKING"
+                                ]
+                            },
+                            "minItems": 1,
+                            "uniqueItems": true
+                        },
+                        "categories": {
+                            "type": "array",
+                            "description": "Filter transactions by category name",
+                            "items": {
+                                "enum": [
+                                    "Uncategorized"
+                                ]
+                            },
+                            "minItems": 1,
+                            "uniqueItems": true
+                        },
+                        "merchants": {
+                            "type": "array",
+                            "description": "Filter transactions by merchant name",
+                            "items": {
+                                "enum": []
+                            },
+                            "minItems": 1,
+                            "uniqueItems": true
+                        },
+                        "tags": {
+                            "type": "array",
+                            "description": "Filter transactions by tag name",
+                            "items": {
+                                "enum": []
+                            },
+                            "minItems": 1,
+                            "uniqueItems": true
+                        }
+                    },
+                    "required": [
+                        "order",
+                        "page"
+                    ],
+                    "additionalProperties": false
+                }
+            },
+            {
+                "name": "get_accounts",
+                "description": "Use this to see what accounts the user has along with their current and historical balances",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                    "additionalProperties": false
+                }
+            },
+            {
+                "name": "get_holdings",
+                "description": "Use this to search user's investment holdings by using various optional filters.\n\nThis function is great for things like:\n- Finding specific holdings or securities\n- Getting portfolio composition and allocation\n- Viewing investment performance and cost basis\n\nNote: This function only returns holdings from Investment and Crypto accounts.\n\nNote on pagination:\n\nThis function can be paginated. You can expect the following properties in the response:\n\n- `total_pages`: The total number of pages of results\n- `page`: The current page of results\n- `page_size`: The number of results per page (this will always be 50)\n- `total_results`: The total number of results for the given filters\n- `total_value`: The total value of all holdings for the given filters\n\nSimple example (all current holdings):\n\n```\nget_holdings({\n  page: 1\n})\n```\n\nMore complex example (various filters):\n\n```\nget_holdings({\n  page: 1,\n  accounts: [\"Brokerage Account\"],\n  securities: [\"AAPL\", \"GOOGL\"]\n})\n```\n",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "page": {
+                            "type": "integer",
+                            "description": "Page number"
+                        },
+                        "accounts": {
+                            "type": "array",
+                            "description": "Filter holdings by account name (only Investment and Crypto accounts are supported)",
+                            "items": {
+                                "enum": []
+                            },
+                            "minItems": 1,
+                            "uniqueItems": true
+                        },
+                        "securities": {
+                            "type": "array",
+                            "description": "Filter holdings by security ticker symbol",
+                            "items": {
+                                "enum": []
+                            },
+                            "minItems": 1,
+                            "uniqueItems": true
+                        }
+                    },
+                    "required": [
+                        "page"
+                    ],
+                    "additionalProperties": false
+                }
+            },
+            {
+                "name": "get_balance_sheet",
+                "description": "Use this to get the user's balance sheet with varying amounts of historical data.\n\nThis is great for answering questions like:\n- What is the user's net worth?  What is it composed of?\n- How has the user's wealth changed over time?\n",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                    "additionalProperties": false
+                }
+            },
+            {
+                "name": "get_income_statement",
+                "description": "Use this to get income and expense insights by category, for a specific time period\n\nThis is great for answering questions like:\n- What is the user's net income for the current month?\n- What are the user's spending habits?\n- How much income or spending did the user have over a specific time period?\n\nSimple example:\n\n```\nget_income_statement({\n  start_date: \"2024-01-01\",\n  end_date: \"2024-12-31\"\n})\n```\n",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "start_date": {
+                            "type": "string",
+                            "description": "Start date for aggregation period in YYYY-MM-DD format"
+                        },
+                        "end_date": {
+                            "type": "string",
+                            "description": "End date for aggregation period in YYYY-MM-DD format"
+                        }
+                    },
+                    "required": [
+                        "start_date",
+                        "end_date"
+                    ],
+                    "additionalProperties": false
+                }
+            },
+            {
+                "name": "get_budget",
+                "description": "Use this to see how the user is tracking against their monthly budget \u2014 total\nbudgeted vs spent and a parent/subcategory breakdown matching the budget UI.\n\nThis is great for answering questions like:\n- How am I tracking against my budget this month?\n- Which categories am I over budget on?\n- How does this month's spending compare to the last few months?\n\nParameters:\n- `month` (optional): \"YYYY-MM\" or \"MMM-YYYY\". Defaults to the current month.\n- `prior_months` (optional): integer 0..11. Number of months\n  preceding the target month to include for trend comparison. Default 0.\n\nExample (current month only):\n\n```\nget_budget({})\n```\n\nExample (current month plus last 2 months):\n\n```\nget_budget({ month: \"2026-08\", prior_months: 2 })\n```\n",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "month": {
+                            "type": "string",
+                            "description": "Target month in YYYY-MM or MMM-YYYY format. Defaults to the current month."
+                        },
+                        "prior_months": {
+                            "type": "integer",
+                            "description": "Number of months before the target month to also return for trend comparison.",
+                            "minimum": 0,
+                            "maximum": 11
+                        }
+                    },
+                    "required": [],
+                    "additionalProperties": false
+                }
+            },
+            {
+                "name": "import_bank_statement",
+                "description": "Use this to import transactions from a bank statement PDF that has already been uploaded.\n\nThis function will:\n1. Extract transaction data from the PDF using AI\n2. Create a transaction import with the extracted data\n3. Return the import ID and extracted transactions for review\n\nThe PDF must have already been uploaded via the PDF import feature.\nOnly use this for PDFs that are identified as bank statements.\n\nExample:\n\n```\nimport_bank_statement({\n  pdf_import_id: \"abc123-def456\",\n  account_id: \"xyz789\"\n})\n```\n\nIf account_id is not provided, you should ask the user which account to import to.\n",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "pdf_import_id": {
+                            "type": "string",
+                            "description": "The ID of the PDF import to extract transactions from"
+                        },
+                        "account_id": {
+                            "type": "string",
+                            "description": "The ID of the account to import transactions into. If not provided, will return available accounts."
+                        }
+                    },
+                    "required": [
+                        "pdf_import_id"
+                    ],
+                    "additionalProperties": false
+                }
+            },
+            {
+                "name": "search_family_files",
+                "description": "Search through documents that the family has uploaded to their financial document store.\n\nUse this when the user asks questions about their uploaded financial documents such as\ntax returns, bank statements, contracts, insurance policies, investment reports, or any\nother files they've imported.\n\nReturns relevant excerpts from matching documents along with the source filename and\na relevance score.\n\nSupported file types include: PDF, DOCX, XLSX, PPTX, TXT, CSV, JSON, XML, HTML, MD,\nand common source code formats.\n\nExample:\n\n```\nsearch_family_files({\n  query: \"What was the total income on my 2024 tax return?\"\n})\n```\n",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The search query to find relevant information in the family's uploaded documents"
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Maximum number of results to return (default: 10, max: 20)"
+                        }
+                    },
+                    "required": [
+                        "query"
+                    ],
+                    "additionalProperties": false
+                }
+            },
+            {
+                "name": "create_goal",
+                "description": "Creates a goal for the user's family.\n\nUse when the user describes a target they want to save toward \u2014 e.g.\n\"vacation in 4 months for $5000\", \"downpayment for a car next year\",\n\"build an emergency fund of $10k\".\n\nBefore calling, confirm the key details by paraphrasing back to the\nuser: the name, target amount, target date (if mentioned), and which\nof their accounts will fund it. Only call once they've confirmed.\n\nConstraints:\n- The goal must link to at least one of the user's Depository\n  accounts (checking, savings, HSA, CD, money-market).\n- All linked accounts must share the same currency.\n- Use account names exactly as listed in the user's Depository\n  accounts.\n\nOn success returns the new goal's URL so you can point the user to\nit. On a soft failure (e.g. account name doesn't match), the\nresponse includes the available account list so you can re-ask.\n",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Short goal name, e.g. 'Vacation in Italy'."
+                        },
+                        "target_amount": {
+                            "type": "number",
+                            "description": "Total amount to save, in the linked accounts' currency."
+                        },
+                        "target_date": {
+                            "type": "string",
+                            "description": "Optional ISO 8601 date (YYYY-MM-DD) for when the user wants to reach the target."
+                        },
+                        "linked_account_names": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            },
+                            "description": "Names of the user's Depository accounts to link. Must contain at least one. Use names exactly as they appear in the available accounts list. The goal's balance is the balance of these accounts."
+                        },
+                        "notes": {
+                            "type": "string",
+                            "description": "Optional freeform notes."
+                        }
+                    },
+                    "required": [
+                        "name",
+                        "target_amount",
+                        "linked_account_names"
+                    ],
+                    "additionalProperties": false
+                }
+            },
+            {
+                "name": "get_tags",
+                "description": "Returns all tags defined for the user's family, sorted alphabetically.\n\nUse this when the user wants to see available tags or before referencing\na tag in another operation like create_tag or update_tag.\n",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                    "additionalProperties": false
+                }
+            },
+            {
+                "name": "create_tag",
+                "description": "Creates a new tag for the user's family.\n\nTags are applied to transactions to organize them beyond categories.\nIf color is omitted, one is chosen automatically from the default palette.\nTag names must be unique within the family.\n",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Tag name (must be unique within the family)"
+                        },
+                        "color": {
+                            "type": "string",
+                            "description": "Hex color code (e.g. #e99537). If omitted, one is chosen from the default palette."
+                        }
+                    },
+                    "required": [
+                        "name"
+                    ],
+                    "additionalProperties": false
+                }
+            },
+            {
+                "name": "update_tag",
+                "description": "Updates an existing tag's name or color.\n\nIdentify the tag by its current name. At least one of new_name or color must be provided.\nUse get_tags first to confirm the tag exists.\n",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Current name of the tag to update",
+                            "enum": []
+                        },
+                        "new_name": {
+                            "type": "string",
+                            "description": "New name for the tag (optional)"
+                        },
+                        "color": {
+                            "type": "string",
+                            "description": "New hex color code (optional)"
+                        }
+                    },
+                    "required": [
+                        "name"
+                    ],
+                    "additionalProperties": false
+                }
+            },
+            {
+                "name": "get_categories",
+                "description": "Returns all categories for the user's family, ordered alphabetically by hierarchy.\n\nEach entry includes id, name, color, icon, parent_id (null for top-level), and\nname_with_parent (e.g. \"Food & Drink > Restaurants\"). Use this before creating\nsubcategories or referencing a category by id in update_category.\n",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                    "additionalProperties": false
+                }
+            },
+            {
+                "name": "create_category",
+                "description": "Creates a new category for the user's family.\n\nCategories support two levels of hierarchy: a top-level category can have subcategories,\nbut subcategories cannot have children. Provide parent_id (from get_categories) to make\na subcategory \u2014 it will inherit the parent's color automatically.\n\nIf icon is omitted it is suggested from the name. If color is omitted a palette color is used\n(ignored for subcategories since color is inherited). Category names must be unique.\n",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Category name (must be unique within the family)"
+                        },
+                        "color": {
+                            "type": "string",
+                            "description": "Hex color code (e.g. #e99537). Ignored for subcategories. Defaults to a palette color."
+                        },
+                        "icon": {
+                            "type": "string",
+                            "description": "Lucide icon name (e.g. 'shopping-cart'). Suggested from name if omitted."
+                        },
+                        "parent_id": {
+                            "type": "string",
+                            "description": "ID of an existing top-level category to nest under (makes this a subcategory). Use get_categories to find ids."
+                        }
+                    },
+                    "required": [
+                        "name"
+                    ],
+                    "additionalProperties": false
+                }
+            },
+            {
+                "name": "update_category",
+                "description": "Updates an existing category's name, color, or icon.\n\nUse get_categories first to find the category id. At least one of name, color,\nor icon must be supplied. Changing a parent's color does not cascade to existing\nsubcategories (their colors are set at creation time).\n",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "description": "ID of the category to update (use get_categories to find it)"
+                        },
+                        "name": {
+                            "type": "string",
+                            "description": "New name for the category (optional)"
+                        },
+                        "color": {
+                            "type": "string",
+                            "description": "New hex color code (optional)"
+                        },
+                        "icon": {
+                            "type": "string",
+                            "description": "New Lucide icon name (optional)"
+                        }
+                    },
+                    "required": [
+                        "id"
+                    ],
+                    "additionalProperties": false
+                }
+            }
+        ]
+    }
+}

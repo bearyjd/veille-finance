@@ -1,0 +1,12 @@
+{
+    "jsonrpc": "2.0",
+    "id": 5,
+    "result": {
+        "content": [
+            {
+                "type": "text",
+                "text": "{\"holdings\":[{\"ticker\":\"VXUS\",\"name\":\"Vanguard Total International Stock ETF\",\"quantity\":824.38,\"price\":161.0,\"currency\":\"USD\",\"amount\":132725.18,\"formatted_amount\":\"$132,725.18\",\"weight\":\"123.62\",\"average_cost\":129.03586938062543,\"formatted_average_cost\":\"$129.04\",\"account\":\"Charles Schwab Brokerage\",\"date\":\"2026-08-18\"},{\"ticker\":\"VXUS\",\"name\":\"Vanguard Total International Stock ETF\",\"quantity\":142.17,\"price\":186.0,\"currency\":\"USD\",\"amount\":26443.62,\"formatted_amount\":\"$26,443.62\",\"weight\":\"142.92\",\"average_cost\":128.97284940564114,\"formatted_average_cost\":\"$128.97\",\"account\":\"Fidelity Roth IRA\",\"date\":\"2026-08-18\"},{\"ticker\":\"VXUS\",\"name\":\"Vanguard Total International Stock ETF\",\"quantity\":153.35,\"price\":84.0,\"currency\":\"GBP\",\"amount\":12881.4,\"formatted_amount\":\"\u00a312,881.40\",\"weight\":\"87.05\",\"average_cost\":95.62999673948484,\"formatted_average_cost\":\"\u00a395.63\",\"account\":\"Vanguard UK ISA\",\"date\":\"2026-08-18\"}],\"total_results\":3,\"page\":1,\"page_size\":50,\"total_pages\":1,\"total_value\":\"$172,050.20\"}"
+            }
+        ]
+    }
+}

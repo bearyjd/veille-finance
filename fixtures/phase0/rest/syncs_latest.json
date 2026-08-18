@@ -1,0 +1,24 @@
+{
+    "data": {
+        "id": "93d69e50-940f-478d-90f4-847400b7f505",
+        "status": "completed",
+        "in_progress": false,
+        "terminal": true,
+        "syncable": {
+            "type": "Account",
+            "id": "9b4701e0-7aa7-4ea0-bde7-2627e1e1c24b",
+            "name": "Jewelry Collection"
+        },
+        "parent_id": null,
+        "children_count": 0,
+        "window_start_date": null,
+        "window_end_date": null,
+        "pending_at": null,
+        "syncing_at": "2026-08-18T15:23:20.240Z",
+        "completed_at": "2026-08-18T15:23:20.266Z",
+        "failed_at": null,
+        "error": null,
+        "created_at": "2026-08-18T15:23:20.236Z",
+        "updated_at": "2026-08-18T15:23:20.267Z"
+    }
+}
