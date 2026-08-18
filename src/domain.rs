@@ -111,3 +111,56 @@ pub struct UpstreamHealth {
     /// One entry per linked institution. Manual accounts do not appear.
     pub institutions: Vec<InstitutionHealth>,
 }
+
+/// Currency minor-unit exponent (ISO 4217) for the currencies Sure
+/// realistically serves; unknown currencies use 2, matching Sure.
+pub fn currency_exponent(currency: &str) -> u32 {
+    match currency {
+        "JPY" | "KRW" | "VND" => 0,
+        "BHD" | "KWD" | "OMR" | "TND" | "JOD" | "IQD" | "LYD" => 3,
+        _ => 2,
+    }
+}
+
+pub fn currency_symbol(currency: &str) -> Option<&'static str> {
+    match currency {
+        "USD" | "CAD" | "AUD" | "NZD" | "SGD" | "HKD" | "MXN" => Some("$"),
+        "EUR" => Some("€"),
+        "GBP" => Some("£"),
+        "JPY" | "CNY" => Some("¥"),
+        "KRW" => Some("₩"),
+        "INR" => Some("₹"),
+        _ => None,
+    }
+}
+
+/// Render integer minor units for humans: symbol (or ISO code prefix),
+/// comma thousands grouping, exponent-correct decimals. Display only —
+/// never parsed back.
+pub fn format_minor(minor: i64, currency: &str) -> String {
+    let exponent = currency_exponent(currency);
+    let divisor = 10u64.pow(exponent);
+    let magnitude = minor.unsigned_abs();
+    let int_part = magnitude / divisor;
+    let frac_part = magnitude % divisor;
+
+    let digits = int_part.to_string();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(c);
+    }
+
+    let number = if exponent == 0 {
+        grouped
+    } else {
+        format!("{grouped}.{frac_part:0width$}", width = exponent as usize)
+    };
+    let sign = if minor < 0 { "-" } else { "" };
+    match currency_symbol(currency) {
+        Some(symbol) => format!("{sign}{symbol}{number}"),
+        None => format!("{sign}{currency} {number}"),
+    }
+}

@@ -4,9 +4,18 @@
 
 store_path = "/var/lib/veille/veille.sqlite3"
 
+# Optional LLM narration (PRP §8). The endpoint and key come from the
+# environment: VEILLE_LLM_BASE_URL, VEILLE_LLM_API_KEY (never in this file).
+# Narration is off unless all three pieces are present, and the digest never
+# depends on it. VEILLE_LLM_MODEL overrides the model set here.
+# [llm]
+# model = "cheap-think"
+
 [[tenants]]
 slug = "example"
 display_name = "Example Household"
+# Days each digest covers (default 7).
+# digest_period_days = 7
 
 [tenants.upstream]
 # Reachable over the internal Docker network; veille publishes no ports and

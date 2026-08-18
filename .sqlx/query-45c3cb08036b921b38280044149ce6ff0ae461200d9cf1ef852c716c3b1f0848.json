@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT rule_id, severity, subject, evidence, detected_at, dedupe_key FROM finding WHERE tenant_id = ? AND detected_at >= ? AND detected_at <= ? ORDER BY detected_at, dedupe_key",
+  "describe": {
+    "columns": [
+      {
+        "name": "rule_id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "severity",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "subject",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "evidence",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "detected_at",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "dedupe_key",
+        "ordinal": 5,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "45c3cb08036b921b38280044149ce6ff0ae461200d9cf1ef852c716c3b1f0848"
+}

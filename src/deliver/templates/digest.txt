@@ -1,0 +1,18 @@
+{{ tenant }} — financial watch digest
+Period: {{ period_start }} to {{ period_end }}
+{% if narration %}
+{{ narration }}
+{% endif %}
+{% if findings %}
+Findings ({{ findings|length }}):
+{% for f in findings %}
+[{{ f.severity }}] {{ f.rule_id }} — {{ f.subject }}
+    {{ f.evidence }}
+{% endfor %}
+{% else %}
+No findings this period.
+{% endif %}
+Accounts as of {{ period_end }}:
+{% for d in deltas %}
+- {{ d.account }}: {{ d.end }}{% if d.change %} ({{ d.change }} since {{ period_start }}){% endif %}
+{% endfor %}

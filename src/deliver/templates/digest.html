@@ -1,0 +1,26 @@
+<h2>{{ tenant }} — financial watch digest</h2>
+<p>Period: {{ period_start }} to {{ period_end }}</p>
+{% if narration %}<p>{{ narration }}</p>{% endif %}
+{% if findings %}
+<h3>Findings ({{ findings|length }})</h3>
+<table border="1" cellpadding="4" cellspacing="0">
+  <tr><th>Severity</th><th>Rule</th><th>Subject</th><th>Details</th></tr>
+  {% for f in findings %}
+  <tr>
+    <td><strong>{{ f.severity }}</strong></td>
+    <td>{{ f.rule_id }}</td>
+    <td>{{ f.subject }}</td>
+    <td><code>{{ f.evidence }}</code></td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>No findings this period.</p>
+{% endif %}
+<h3>Accounts as of {{ period_end }}</h3>
+<table border="1" cellpadding="4" cellspacing="0">
+  <tr><th>Account</th><th>Balance</th><th>Change</th></tr>
+  {% for d in deltas %}
+  <tr><td>{{ d.account }}</td><td>{{ d.end }}</td><td>{{ d.change if d.change else "—" }}</td></tr>
+  {% endfor %}
+</table>

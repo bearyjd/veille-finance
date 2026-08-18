@@ -21,7 +21,17 @@ pub enum ConfigError {
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub store_path: PathBuf,
+    /// Optional narration settings. The endpoint and key come from the
+    /// environment (PRP §8); only the model name lives here.
+    #[serde(default)]
+    pub llm: Option<LlmSection>,
     pub tenants: Vec<TenantConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LlmSection {
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -36,6 +46,8 @@ pub struct TenantConfig {
     /// Per-tenant rule thresholds (PRP §7: thresholds live in config, not code).
     #[serde(default)]
     pub rules: RuleThresholds,
+    /// Days each digest covers (default 7).
+    pub digest_period_days: Option<u32>,
 }
 
 /// Defaults are conservative: a tool that cries wolf gets muted, and a muted

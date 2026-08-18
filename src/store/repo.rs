@@ -17,7 +17,19 @@ pub struct AccountSnapshotRow {
     pub external_id: String,
     pub name: String,
     pub balance_minor: i64,
+    pub currency: String,
     pub as_of_date: chrono::NaiveDate,
+}
+
+/// One persisted finding, as the digest reads it back.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoredFinding {
+    pub rule_id: String,
+    pub severity: crate::domain::Severity,
+    pub subject: String,
+    pub evidence: serde_json::Value,
+    pub detected_at: DateTime<Utc>,
+    pub dedupe_key: String,
 }
 
 /// One institution's health as recorded at the last sync.
@@ -182,6 +194,57 @@ impl Store {
         Ok(new_rows)
     }
 
+    /// Findings detected in `[since, until]`, ordered for stable display:
+    /// most severe first, then rule id, then dedupe key.
+    pub async fn findings_between(
+        &self,
+        tenant: TenantId,
+        since: DateTime<Utc>,
+        until: DateTime<Utc>,
+    ) -> Result<Vec<StoredFinding>> {
+        let since = since.to_rfc3339();
+        let until = until.to_rfc3339();
+        let rows = sqlx::query!(
+            "SELECT rule_id, severity, subject, evidence, detected_at, dedupe_key \
+             FROM finding \
+             WHERE tenant_id = ? AND detected_at >= ? AND detected_at <= ? \
+             ORDER BY detected_at, dedupe_key",
+            tenant.0,
+            since,
+            until,
+        )
+        .fetch_all(self.pool())
+        .await?;
+
+        let mut findings: Vec<StoredFinding> = rows
+            .into_iter()
+            .map(|r| {
+                Ok(StoredFinding {
+                    rule_id: r.rule_id,
+                    severity: r
+                        .severity
+                        .parse()
+                        .map_err(|e: String| corrupt("finding.severity", &e))?,
+                    subject: r.subject,
+                    evidence: serde_json::from_str(&r.evidence)
+                        .map_err(|e| corrupt("finding.evidence", &e))?,
+                    detected_at: DateTime::parse_from_rfc3339(&r.detected_at)
+                        .map_err(|e| corrupt("finding.detected_at", &e))?
+                        .with_timezone(&Utc),
+                    dedupe_key: r.dedupe_key,
+                })
+            })
+            .collect::<Result<_>>()?;
+        findings.sort_by(|a, b| {
+            (std::cmp::Reverse(a.severity), &a.rule_id, &a.dedupe_key).cmp(&(
+                std::cmp::Reverse(b.severity),
+                &b.rule_id,
+                &b.dedupe_key,
+            ))
+        });
+        Ok(findings)
+    }
+
     pub async fn finding_count(&self, tenant: TenantId) -> Result<u64> {
         let count = sqlx::query_scalar!(
             r#"SELECT COUNT(*) as "c: i64" FROM finding WHERE tenant_id = ?"#,
@@ -205,7 +268,7 @@ impl Store {
     /// All account snapshot observations, ascending by observation time.
     pub async fn account_snapshot_rows(&self, tenant: TenantId) -> Result<Vec<AccountSnapshotRow>> {
         let rows = sqlx::query!(
-            "SELECT external_id, name, balance_minor, as_of \
+            "SELECT external_id, name, balance_minor, currency, as_of \
              FROM account_snapshot WHERE tenant_id = ? ORDER BY as_of, external_id, id",
             tenant.0
         )
@@ -217,6 +280,7 @@ impl Store {
                     external_id: r.external_id,
                     name: r.name,
                     balance_minor: r.balance_minor,
+                    currency: r.currency,
                     as_of_date: DateTime::parse_from_rfc3339(&r.as_of)
                         .map_err(|e| corrupt("account_snapshot.as_of", &e))?
                         .with_timezone(&Utc)
