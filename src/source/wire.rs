@@ -92,6 +92,7 @@ pub struct WireSecurity {
 
 #[derive(Debug, Deserialize)]
 pub struct WireHolding {
+    pub date: NaiveDate,
     pub qty: String,
     /// Locale-formatted money string (e.g. `"$430.14"`); upstream exposes no
     /// numeric market value. See ADR-001.
@@ -210,6 +211,7 @@ impl From<WireHolding> for Holding {
             quantity: w.qty,
             market_value_minor,
             currency: w.currency,
+            as_of_date: w.date,
         }
     }
 }
@@ -243,9 +245,8 @@ pub fn derive_health(
         let (Some(syncable), Some(completed_at)) = (&sync.syncable, sync.completed_at) else {
             continue;
         };
-        if syncable.kind != "Account" {
-            continue;
-        }
+        // Membership in the account map is the real test; the syncable kind
+        // string is upstream vocabulary that may drift.
         let Some(institution) = institution_by_account.get(syncable.id.as_str()) else {
             continue;
         };
@@ -354,4 +355,30 @@ pub fn parse_formatted_money(formatted: &str, currency: &str) -> Option<i64> {
 
     let magnitude: i64 = format!("{int_digits}{frac_digits}").parse().ok()?;
     Some(if negative { -magnitude } else { magnitude })
+}
+
+/// Reduce a dated holdings series to the newest row per (account, security).
+/// `/api/v1/holdings` returns one row per (account, security, date) —
+/// verified in Phase 0 (`total_count: 3342`, chronological order).
+pub fn latest_positions(holdings: Vec<WireHolding>) -> Vec<WireHolding> {
+    use std::collections::BTreeMap;
+
+    let mut latest: BTreeMap<(String, String), WireHolding> = BTreeMap::new();
+    for holding in holdings {
+        let key = (
+            holding.account.id.clone(),
+            holding
+                .security
+                .ticker
+                .clone()
+                .unwrap_or_else(|| holding.security.name.clone()),
+        );
+        match latest.get(&key) {
+            Some(existing) if existing.date >= holding.date => {}
+            _ => {
+                latest.insert(key, holding);
+            }
+        }
+    }
+    latest.into_values().collect()
 }

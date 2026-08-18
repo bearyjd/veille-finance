@@ -44,6 +44,9 @@ pub struct Holding {
     /// `None` when the upstream formatted money string could not be strictly parsed.
     pub market_value_minor: Option<i64>,
     pub currency: String,
+    /// The upstream valuation date of this position — holdings are a dated
+    /// series upstream, and this may lag the sync time.
+    pub as_of_date: NaiveDate,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

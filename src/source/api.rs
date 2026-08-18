@@ -31,6 +31,16 @@ const MAX_SYNC_PAGES: u32 = 10;
 /// far beyond household scale). A server whose `total_pages` keeps growing
 /// gets a loud contract error instead of an unbounded crawl.
 const MAX_DATA_PAGES: u32 = 200;
+/// Holdings are a dated series upstream; fetch only this recent window and
+/// reduce to the newest row per position. Any live account produces rows far
+/// more often than this.
+const HOLDINGS_WINDOW_DAYS: i64 = 90;
+/// On HTTP 429, honor Retry-After up to this many attempts per request.
+/// Sure's standard tier allows 100 requests/hour; the reset can be most of
+/// an hour away, so waits are long but bounded.
+const RATE_LIMIT_RETRIES: u32 = 2;
+const RETRY_AFTER_DEFAULT: Duration = Duration::from_secs(300);
+const RETRY_AFTER_CAP: Duration = Duration::from_secs(3900);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A GET-only HTTP client. Deliberately incapable of any other verb.
@@ -52,32 +62,61 @@ impl ReadOnlyHttp {
             .base
             .join(path.trim_start_matches('/'))
             .map_err(|e| SourceError::Request(format!("invalid path {path}: {e}")))?;
-        let response = self
-            .client
-            .get(url.clone())
-            .header("X-Api-Key", self.api_key.clone())
-            .query(query)
-            .send()
-            .await
-            .map_err(|e| SourceError::Request(format!("GET {path}: {e}")))?;
 
-        let status = response.status();
-        if !status.is_success() {
-            // Do not echo the body: error payloads are upstream-controlled
-            // and belong in upstream logs, not ours.
-            return Err(SourceError::Request(format!(
-                "GET {path} returned HTTP {status}"
-            )));
+        let mut rate_limit_attempts = 0u32;
+        loop {
+            let response = self
+                .client
+                .get(url.clone())
+                .header("X-Api-Key", self.api_key.clone())
+                .query(query)
+                .send()
+                .await
+                .map_err(|e| SourceError::Request(format!("GET {path}: {e}")))?;
+
+            let status = response.status();
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                && rate_limit_attempts < RATE_LIMIT_RETRIES
+            {
+                let wait = response
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .map(Duration::from_secs)
+                    .unwrap_or(RETRY_AFTER_DEFAULT)
+                    .min(RETRY_AFTER_CAP);
+                rate_limit_attempts += 1;
+                tracing::warn!(
+                    path,
+                    wait_secs = wait.as_secs(),
+                    attempt = rate_limit_attempts,
+                    "rate limited by upstream; honoring Retry-After"
+                );
+                tokio::time::sleep(wait).await;
+                continue;
+            }
+            if !status.is_success() {
+                // Do not echo the body: error payloads are upstream-controlled
+                // and belong in upstream logs, not ours.
+                return Err(SourceError::Request(format!(
+                    "GET {path} returned HTTP {status}"
+                )));
+            }
+            return response
+                .json::<T>()
+                .await
+                .map_err(|e| SourceError::Contract(format!("GET {path}: {e}")));
         }
-        response
-            .json::<T>()
-            .await
-            .map_err(|e| SourceError::Contract(format!("GET {path}: {e}")))
     }
 }
 
 pub struct ApiSureSource {
     http: ReadOnlyHttp,
+    /// One accounts fetch per source instance (one instance = one sync run):
+    /// `accounts()` and `health()` share it, saving a full page sweep against
+    /// the 100 req/h budget.
+    accounts_cache: tokio::sync::OnceCell<Vec<WireAccount>>,
 }
 
 impl ApiSureSource {
@@ -109,6 +148,7 @@ impl ApiSureSource {
                 base,
                 api_key,
             },
+            accounts_cache: tokio::sync::OnceCell::new(),
         })
     }
 
@@ -152,14 +192,18 @@ impl ApiSureSource {
         }
     }
 
-    async fn fetch_all_accounts(&self) -> Result<Vec<WireAccount>> {
-        self.fetch_paged(
-            "/api/v1/accounts",
-            &[],
-            |p: AccountsPage| (p.accounts, p.pagination.total_pages),
-            |a: &WireAccount| a.id.clone(),
-        )
-        .await
+    async fn cached_accounts(&self) -> Result<&Vec<WireAccount>> {
+        self.accounts_cache
+            .get_or_try_init(|| async {
+                self.fetch_paged(
+                    "/api/v1/accounts",
+                    &[],
+                    |p: AccountsPage| (p.accounts, p.pagination.total_pages),
+                    |a: &WireAccount| a.id.clone(),
+                )
+                .await
+            })
+            .await
     }
 }
 
@@ -176,10 +220,21 @@ fn page_query(page: u32, extra: &[(&'static str, String)]) -> Vec<(&'static str,
 impl SureSource for ApiSureSource {
     async fn accounts(&self) -> Result<Vec<Account>> {
         Ok(self
-            .fetch_all_accounts()
+            .cached_accounts()
             .await?
-            .into_iter()
-            .map(Account::from)
+            .iter()
+            .map(|a| {
+                Account::from(WireAccount {
+                    id: a.id.clone(),
+                    name: a.name.clone(),
+                    balance_cents: a.balance_cents,
+                    currency: a.currency.clone(),
+                    classification: a.classification.clone(),
+                    account_type: a.account_type.clone(),
+                    status: a.status.clone(),
+                    institution_name: a.institution_name.clone(),
+                })
+            })
             .collect())
     }
 
@@ -209,10 +264,16 @@ impl SureSource for ApiSureSource {
     }
 
     async fn holdings(&self) -> Result<Vec<Holding>> {
+        // The endpoint is a dated series (one row per account, security,
+        // date). Fetch a bounded recent window, dedupe exact rows, and keep
+        // only the newest valuation per position.
+        let window_start =
+            (Utc::now().date_naive() - chrono::Duration::days(HOLDINGS_WINDOW_DAYS)).to_string();
+        let extra: Vec<(&'static str, String)> = vec![("start_date", window_start)];
         let wire_holdings = self
             .fetch_paged(
                 "/api/v1/holdings",
-                &[],
+                &extra,
                 |p: HoldingsPage| (p.holdings, p.pagination.total_pages),
                 |h: &wire::WireHolding| {
                     (
@@ -221,15 +282,19 @@ impl SureSource for ApiSureSource {
                             .ticker
                             .clone()
                             .unwrap_or_else(|| h.security.name.clone()),
+                        h.date,
                     )
                 },
             )
             .await?;
-        Ok(wire_holdings.into_iter().map(Holding::from).collect())
+        Ok(wire::latest_positions(wire_holdings)
+            .into_iter()
+            .map(Holding::from)
+            .collect())
     }
 
     async fn health(&self) -> Result<UpstreamHealth> {
-        let accounts = self.fetch_all_accounts().await?;
+        let accounts = self.cached_accounts().await?;
 
         let mut syncs: Vec<WireSync> = Vec::new();
         let mut page = 1u32;
@@ -246,6 +311,6 @@ impl SureSource for ApiSureSource {
             page += 1;
         }
 
-        Ok(wire::derive_health(&accounts, &syncs, Utc::now()))
+        Ok(wire::derive_health(accounts, &syncs, Utc::now()))
     }
 }

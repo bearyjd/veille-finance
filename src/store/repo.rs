@@ -315,16 +315,19 @@ async fn insert_holding_snapshots_on(
 ) -> Result<u64> {
     let as_of = as_of.to_rfc3339();
     for h in holdings {
+        let position_date = h.as_of_date.to_string();
         sqlx::query!(
             "INSERT INTO holding_snapshot \
-             (tenant_id, account_external_id, symbol, quantity, market_value_minor, currency, as_of) \
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+             (tenant_id, account_external_id, symbol, quantity, market_value_minor, currency, \
+              position_date, as_of) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             tenant.0,
             h.account_external_id,
             h.symbol,
             h.quantity,
             h.market_value_minor,
             h.currency,
+            position_date,
             as_of,
         )
         .execute(&mut *conn)

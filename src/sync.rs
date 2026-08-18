@@ -64,7 +64,10 @@ pub async fn sync_tenant(
         match store.max_posted_at(tenant).await? {
             // checked: a pathological stored date must degrade to a full
             // fetch, not panic the process.
+            // Clamp to today: a post-dated row must not push the window past
+            // `now` and blind every later incremental sync.
             Some(newest) => newest
+                .min(now.date_naive())
                 .checked_sub_signed(Duration::days(i64::from(options.lookback_days)))
                 .and_then(|start| start.and_hms_opt(0, 0, 0))
                 .map(|dt| dt.and_utc())

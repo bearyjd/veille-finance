@@ -298,3 +298,124 @@ async fn contradictory_sign_and_classification_is_a_contract_error() {
         "error should name the inconsistency: {err}"
     );
 }
+
+fn wire_holding(account: &str, ticker: &str, date: &str, amount: &str) -> serde_json::Value {
+    json!({
+        "id": format!("h-{account}-{ticker}-{date}"), "date": date,
+        "qty": "3.21", "price": "$1.00", "amount": amount,
+        "currency": "USD", "cost_basis_source": "calculated",
+        "account": { "id": account, "name": account, "account_type": "investment" },
+        "security": { "id": format!("sec-{ticker}"), "ticker": ticker, "name": ticker },
+        "avg_cost": null,
+        "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z"
+    })
+}
+
+#[tokio::test]
+async fn holdings_history_reduces_to_latest_position_per_account_and_security() {
+    // /api/v1/holdings is a historical series (one row per account, security,
+    // date — Phase 0 capture: total_count 3342, chronological). The adapter
+    // must keep only the newest valuation of each position, bounded by a
+    // start_date window so it does not crawl years of history.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/holdings"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "holdings": [
+                wire_holding("acct-1", "VXUS", "2023-08-01", "$430.14"),
+                wire_holding("acct-1", "VXUS", "2026-08-10", "$512.00"),
+                wire_holding("acct-1", "VXUS", "2026-08-15", "$520.55"),
+                wire_holding("acct-2", "VTI", "2026-08-14", "$1,000.00"),
+            ],
+            "pagination": pagination(1, 1, 4)
+        })))
+        .mount(&server)
+        .await;
+
+    let holdings = source_for(&server)
+        .await
+        .holdings()
+        .await
+        .expect("holdings");
+    assert_eq!(holdings.len(), 2, "one position per (account, security)");
+    let vxus = holdings
+        .iter()
+        .find(|h| h.symbol == "VXUS")
+        .expect("VXUS kept");
+    assert_eq!(
+        vxus.market_value_minor,
+        Some(52_055),
+        "newest valuation wins"
+    );
+    assert_eq!(vxus.as_of_date.to_string(), "2026-08-15");
+
+    let requests = server.received_requests().await.expect("reqs");
+    assert!(
+        requests[0].url.query().unwrap_or("").contains("start_date"),
+        "history fetch must be windowed, not unbounded"
+    );
+}
+
+#[tokio::test]
+async fn rate_limited_requests_honor_retry_after() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/accounts"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("Retry-After", "1")
+                .set_body_json(json!({ "error": "rate_limit_exceeded" })),
+        )
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/accounts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "accounts": [wire_account("a-1", "One", None)],
+            "pagination": pagination(1, 1, 1)
+        })))
+        .mount(&server)
+        .await;
+
+    let accounts = source_for(&server)
+        .await
+        .accounts()
+        .await
+        .expect("succeeds after honoring Retry-After");
+    assert_eq!(accounts.len(), 1);
+}
+
+#[tokio::test]
+async fn health_reuses_the_accounts_fetch_and_every_request_is_a_get() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/accounts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "accounts": [wire_account("a-1", "One", Some("First National"))],
+            "pagination": pagination(1, 1, 1)
+        })))
+        .expect(1) // accounts() + health() must share one fetch
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/syncs"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": [], "meta": pagination(1, 1, 0)
+        })))
+        .mount(&server)
+        .await;
+
+    let source = source_for(&server).await;
+    source.accounts().await.expect("accounts");
+    source.health().await.expect("health");
+
+    for request in server.received_requests().await.expect("reqs") {
+        assert_eq!(
+            request.method.to_string(),
+            "GET",
+            "read-only invariant: {}",
+            request.url
+        );
+    }
+}

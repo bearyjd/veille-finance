@@ -133,3 +133,49 @@ fn blank_merchant_falls_back_to_description_for_counterparty() {
     let domain: Transaction = wire.try_into().expect("consistent");
     assert_eq!(domain.counterparty_key.as_deref(), Some("acme market"));
 }
+
+#[test]
+fn holding_conversion_carries_the_valuation_date() {
+    let page: HoldingsPage = serde_json::from_str(&fixture("holdings")).expect("parse holdings");
+    let vxus = page
+        .holdings
+        .into_iter()
+        .find(|h| h.security.ticker.as_deref() == Some("VXUS"))
+        .expect("VXUS present");
+    let domain: Holding = vxus.into();
+    assert_eq!(
+        domain.as_of_date.to_string(),
+        "2023-08-01",
+        "the upstream valuation date must survive into the domain"
+    );
+}
+
+#[test]
+fn health_counts_any_syncable_matching_a_known_account_id() {
+    // Robustness against upstream renaming the syncable type: membership in
+    // the account map is the real test, not the kind string.
+    let accounts: AccountsPage = serde_json::from_str(&fixture("accounts")).expect("accounts");
+    let raw = r#"{
+        "status": "completed",
+        "syncable": { "type": "AccountSyncJob", "id": "ACCOUNT_ID", "name": null },
+        "completed_at": "2026-08-15T06:00:05Z",
+        "failed_at": null,
+        "error": null
+    }"#;
+    // Use a real linked-account setup: synthesize one linked account.
+    let linked: veille::source::wire::WireAccount = serde_json::from_str(
+        r#"{"id":"acct-x","name":"X","balance_cents":1,"currency":"USD",
+            "classification":"asset","account_type":"depository","status":"active",
+            "institution_name":"Bank X"}"#,
+    )
+    .expect("account");
+    let sync: veille::source::wire::WireSync =
+        serde_json::from_str(&raw.replace("ACCOUNT_ID", "acct-x")).expect("sync");
+    let _ = accounts;
+    let health = veille::source::wire::derive_health(&[linked], &[sync], chrono::Utc::now());
+    assert_eq!(health.institutions.len(), 1);
+    assert!(
+        health.institutions[0].last_successful_sync_at.is_some(),
+        "a completed sync for a known account counts regardless of syncable kind"
+    );
+}

@@ -50,6 +50,7 @@ fn holding(symbol: &str) -> Holding {
         quantity: "2.5".into(),
         market_value_minor: Some(50_000),
         currency: "USD".into(),
+        as_of_date: "2026-08-01".parse().expect("date"),
     }
 }
 

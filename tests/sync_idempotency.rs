@@ -231,3 +231,50 @@ fn test_txn(
         updated_at: updated_at.single().expect("ts"),
     }
 }
+
+#[tokio::test]
+async fn future_dated_transactions_do_not_poison_the_watermark() {
+    use chrono::TimeZone;
+    let dir = TempDir::new().expect("tempdir");
+    let store = Store::open(&dir.path().join("t.sqlite3"))
+        .await
+        .expect("store");
+    let tenant = store.tenants().ensure("a", "A").await.expect("tenant");
+    let source =
+        FixtureSureSource::new(format!("{}/fixtures/synthetic", env!("CARGO_MANIFEST_DIR")));
+
+    // A post-dated row (e.g. scheduled payment) far in the future.
+    let mut future = test_txn(
+        "future",
+        "post-dated",
+        Utc.with_ymd_and_hms(2026, 8, 1, 0, 0, 0),
+    );
+    future.posted_at = "2026-09-05".parse().expect("date");
+    let now = Utc
+        .with_ymd_and_hms(2026, 8, 17, 22, 0, 0)
+        .single()
+        .expect("ts");
+    store
+        .upsert_transactions(tenant, &[future], now)
+        .await
+        .expect("seed");
+
+    // Unclamped, since would be 2026-09-05 - 30d = 2026-08-06 and txn-0001
+    // (2026-08-01) would be invisible. Clamped to now, since = 2026-07-18.
+    let outcome = sync_tenant(
+        &store,
+        tenant,
+        &source,
+        now,
+        SyncOptions {
+            lookback_days: 30,
+            full: false,
+        },
+    )
+    .await
+    .expect("sync");
+    assert_eq!(
+        outcome.transactions.inserted, 1,
+        "the watermark must anchor to min(newest, now)"
+    );
+}

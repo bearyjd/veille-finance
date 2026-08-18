@@ -60,7 +60,10 @@ impl SureSource for FixtureSureSource {
 
     async fn holdings(&self) -> Result<Vec<Holding>> {
         let page: HoldingsPage = self.load("holdings.json").await?;
-        Ok(page.holdings.into_iter().map(Holding::from).collect())
+        Ok(wire::latest_positions(page.holdings)
+            .into_iter()
+            .map(Holding::from)
+            .collect())
     }
 
     async fn health(&self) -> Result<UpstreamHealth> {

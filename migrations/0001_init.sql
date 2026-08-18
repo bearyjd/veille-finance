@@ -53,7 +53,8 @@ CREATE TABLE holding_snapshot (
     quantity            TEXT NOT NULL,      -- exact decimal string (not money)
     market_value_minor  INTEGER,            -- NULL when the upstream formatted string could not be strictly parsed
     currency            TEXT NOT NULL,
-    as_of               TEXT NOT NULL       -- RFC 3339 UTC
+    position_date       TEXT NOT NULL,      -- YYYY-MM-DD: upstream's valuation date (may lag as_of)
+    as_of               TEXT NOT NULL       -- RFC 3339 UTC, time of the sync that observed it
 );
 CREATE INDEX idx_holding_snapshot_lookup
     ON holding_snapshot (tenant_id, account_external_id, as_of);

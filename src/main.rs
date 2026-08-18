@@ -70,6 +70,27 @@ async fn run(cli: Cli) -> Result<(), String> {
     }
 }
 
+fn build_source(
+    tenant_config: &veille::config::TenantConfig,
+    fixtures: &Option<PathBuf>,
+) -> Result<Box<dyn SureSource>, String> {
+    match fixtures {
+        Some(dir) => Ok(Box::new(FixtureSureSource::new(dir.clone()))),
+        None => {
+            let key = std::env::var(&tenant_config.upstream.api_key_env).map_err(|_| {
+                format!(
+                    "environment variable {} (api key) is not set",
+                    tenant_config.upstream.api_key_env
+                )
+            })?;
+            Ok(Box::new(
+                ApiSureSource::new(&tenant_config.upstream.base_url, key)
+                    .map_err(|e| e.to_string())?,
+            ))
+        }
+    }
+}
+
 async fn sync_command(
     config: &Config,
     only_tenant: Option<String>,
@@ -99,19 +120,14 @@ async fn sync_command(
 
     let mut failures = Vec::new();
     for tenant_config in selected {
-        let source: Box<dyn SureSource> = match &fixtures {
-            Some(dir) => Box::new(FixtureSureSource::new(dir.clone())),
-            None => {
-                let key = std::env::var(&tenant_config.upstream.api_key_env).map_err(|_| {
-                    format!(
-                        "environment variable {} (api key for tenant {:?}) is not set",
-                        tenant_config.upstream.api_key_env, tenant_config.slug
-                    )
-                })?;
-                Box::new(
-                    ApiSureSource::new(&tenant_config.upstream.base_url, key)
-                        .map_err(|e| e.to_string())?,
-                )
+        // A broken credential or base_url for one tenant must not prevent the
+        // other tenants from syncing — collect and keep going.
+        let source: Box<dyn SureSource> = match build_source(tenant_config, &fixtures) {
+            Ok(source) => source,
+            Err(message) => {
+                tracing::error!(tenant = %tenant_config.slug, error = %message, "source setup failed");
+                failures.push(format!("{}: {message}", tenant_config.slug));
+                continue;
             }
         };
 
