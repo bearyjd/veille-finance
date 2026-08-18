@@ -70,6 +70,8 @@ impl Config {
         }
 
         let mut seen = std::collections::BTreeSet::new();
+        let mut seen_base_urls = std::collections::BTreeSet::new();
+        let mut seen_key_envs = std::collections::BTreeSet::new();
         for tenant in &self.tenants {
             if !is_valid_slug(&tenant.slug) {
                 return Err(invalid(format!(
@@ -94,10 +96,26 @@ impl Config {
                     tenant.slug, tenant.upstream.api_key_env
                 )));
             }
-            if tenant.upstream.base_url.trim().is_empty() {
+            let base_url = tenant.upstream.base_url.trim();
+            if !(base_url.starts_with("http://") || base_url.starts_with("https://")) {
                 return Err(invalid(format!(
-                    "tenant {:?} has an empty upstream base_url",
+                    "tenant {:?}: base_url {:?} must use http:// or https://",
+                    tenant.slug, tenant.upstream.base_url
+                )));
+            }
+            // One upstream = one tenant. Two tenants sharing a base_url or a
+            // key would silently write one household's data into another
+            // household's rows — the only cross-tenant path this design has.
+            if !seen_base_urls.insert(base_url) {
+                return Err(invalid(format!(
+                    "tenant {:?}: base_url {base_url:?} is already used by another tenant",
                     tenant.slug
+                )));
+            }
+            if !seen_key_envs.insert(tenant.upstream.api_key_env.as_str()) {
+                return Err(invalid(format!(
+                    "tenant {:?}: api_key_env {:?} is already used by another tenant",
+                    tenant.slug, tenant.upstream.api_key_env
                 )));
             }
         }

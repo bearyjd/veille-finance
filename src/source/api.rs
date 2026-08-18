@@ -37,7 +37,8 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 struct ReadOnlyHttp {
     client: reqwest::Client,
     base: Url,
-    api_key: String,
+    /// Marked sensitive so no Debug rendering ever prints the key.
+    api_key: reqwest::header::HeaderValue,
 }
 
 impl ReadOnlyHttp {
@@ -46,14 +47,15 @@ impl ReadOnlyHttp {
         path: &str,
         query: &[(&str, String)],
     ) -> Result<T> {
+        // Relative join so a base_url with a path prefix keeps it.
         let url = self
             .base
-            .join(path)
+            .join(path.trim_start_matches('/'))
             .map_err(|e| SourceError::Request(format!("invalid path {path}: {e}")))?;
         let response = self
             .client
             .get(url.clone())
-            .header("X-Api-Key", &self.api_key)
+            .header("X-Api-Key", self.api_key.clone())
             .query(query)
             .send()
             .await
@@ -80,8 +82,18 @@ pub struct ApiSureSource {
 
 impl ApiSureSource {
     pub fn new(base_url: &str, api_key: String) -> Result<Self> {
-        let base = Url::parse(base_url)
+        // Normalize to a trailing slash so relative joins preserve any path
+        // prefix in the configured base_url.
+        let normalized = if base_url.ends_with('/') {
+            base_url.to_string()
+        } else {
+            format!("{base_url}/")
+        };
+        let base = Url::parse(&normalized)
             .map_err(|e| SourceError::Request(format!("invalid base url: {e}")))?;
+        let mut api_key = reqwest::header::HeaderValue::from_str(&api_key)
+            .map_err(|_| SourceError::Request("api key contains invalid header bytes".into()))?;
+        api_key.set_sensitive(true);
         let client = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
             // Never follow redirects: Sure's API does not legitimately

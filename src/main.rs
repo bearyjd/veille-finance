@@ -76,6 +76,11 @@ async fn sync_command(
     fixtures: Option<PathBuf>,
     full: bool,
 ) -> Result<(), String> {
+    // A fixture directory is one instance's data; syncing it into every
+    // configured tenant would cross-pollute the store.
+    if fixtures.is_some() && only_tenant.is_none() && config.tenants.len() > 1 {
+        return Err("--fixtures requires --tenant when more than one tenant is configured".into());
+    }
     let store = Store::open(&config.store_path)
         .await
         .map_err(|e| e.to_string())?;

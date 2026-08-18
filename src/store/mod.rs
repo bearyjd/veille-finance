@@ -7,7 +7,6 @@
 pub mod repo;
 
 use std::path::Path;
-use std::str::FromStr;
 
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
@@ -35,10 +34,11 @@ pub struct Store {
 
 impl Store {
     /// Open (creating if needed) the store at `path` and bring the schema up
-    /// to date.
+    /// to date. On Unix the file is restricted to the owner — it holds every
+    /// tenant's financial history.
     pub async fn open(path: &Path) -> Result<Self> {
-        let url = format!("sqlite://{}", path.display());
-        let options = SqliteConnectOptions::from_str(&url)?
+        let options = SqliteConnectOptions::new()
+            .filename(path)
             .create_if_missing(true)
             .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
             .foreign_keys(true);
@@ -46,6 +46,16 @@ impl Store {
             .max_connections(4)
             .connect_with(options)
             .await?;
+
+        // Before any data lands. SQLite's -wal/-shm sidecars inherit the main
+        // file's permissions.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+                .map_err(|e| StoreError::Db(sqlx::Error::Io(e)))?;
+        }
+
         sqlx::migrate!("./migrations").run(&pool).await?;
         Ok(Self { pool })
     }

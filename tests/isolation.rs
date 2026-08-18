@@ -173,3 +173,21 @@ async fn tenant_ensure_is_idempotent_and_lookup_matches() {
         "unknown slug must be an error, not a default"
     );
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn store_file_is_readable_by_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TempDir::new().expect("tempdir");
+    let path = dir.path().join("test.sqlite3");
+    let _store = Store::open(&path).await.expect("store opens");
+    let mode = std::fs::metadata(&path)
+        .expect("metadata")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(
+        mode, 0o600,
+        "a multi-household financial store must not be group/world readable"
+    );
+}

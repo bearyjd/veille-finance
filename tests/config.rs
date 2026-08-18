@@ -116,3 +116,74 @@ api_key_env = "phase0_rest_key_alpha_0123456789abcdef"
         "error should point at the field: {err}"
     );
 }
+
+#[test]
+fn rejects_duplicate_upstreams_across_tenants() {
+    // Two tenants naming the same base_url would silently write one
+    // household's data into another household's rows.
+    let f = write_config(
+        r#"
+store_path = "/tmp/v.sqlite3"
+[[tenants]]
+slug = "jd"
+display_name = "Self"
+[tenants.upstream]
+base_url = "http://same:3000"
+api_key_env = "K1"
+[[tenants]]
+slug = "parents"
+display_name = "Parents"
+[tenants.upstream]
+base_url = "http://same:3000"
+api_key_env = "K2"
+"#,
+    );
+    let err = Config::load(f.path()).expect_err("duplicate base_url must fail");
+    assert!(
+        err.to_string().contains("base_url"),
+        "error should name the field: {err}"
+    );
+
+    let f = write_config(
+        r#"
+store_path = "/tmp/v.sqlite3"
+[[tenants]]
+slug = "jd"
+display_name = "Self"
+[tenants.upstream]
+base_url = "http://a:3000"
+api_key_env = "SAME_KEY"
+[[tenants]]
+slug = "parents"
+display_name = "Parents"
+[tenants.upstream]
+base_url = "http://b:3000"
+api_key_env = "SAME_KEY"
+"#,
+    );
+    let err = Config::load(f.path()).expect_err("duplicate api_key_env must fail");
+    assert!(
+        err.to_string().contains("api_key_env"),
+        "error should name the field: {err}"
+    );
+}
+
+#[test]
+fn rejects_non_http_base_urls() {
+    let f = write_config(
+        r#"
+store_path = "/tmp/v.sqlite3"
+[[tenants]]
+slug = "jd"
+display_name = "Self"
+[tenants.upstream]
+base_url = "ftp://a:3000"
+api_key_env = "K"
+"#,
+    );
+    let err = Config::load(f.path()).expect_err("non-http scheme must fail");
+    assert!(
+        err.to_string().contains("http"),
+        "error should mention the allowed schemes: {err}"
+    );
+}
