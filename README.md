@@ -27,8 +27,9 @@ empirical study of Sure's API surface that this design rests on.
 
 ## Status
 
-Pre-1.0, under active development. Phase 1 (adapter + store + sync) in
-progress.
+Pre-1.0, under active development. Phase 1 (adapter + store + sync) and
+Phase 2 (rule engine, `veille evaluate`) implemented; narration and delivery
+(Phases 3–4) not yet started.
 
 ## License
 

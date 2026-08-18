@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT external_id, name, balance_minor, as_of FROM account_snapshot WHERE tenant_id = ? ORDER BY as_of, external_id, id",
+  "describe": {
+    "columns": [
+      {
+        "name": "external_id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "balance_minor",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "as_of",
+        "ordinal": 3,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "e03e8528ac70737d75e95f6533f326d5d5dc29fd370b82301464124531c14d4c"
+}

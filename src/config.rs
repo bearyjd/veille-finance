@@ -33,6 +33,50 @@ pub struct TenantConfig {
     /// Upstream backfills older than this are only caught by a `--full` resync.
     pub lookback_days: Option<u32>,
     pub upstream: UpstreamConfig,
+    /// Per-tenant rule thresholds (PRP §7: thresholds live in config, not code).
+    #[serde(default)]
+    pub rules: RuleThresholds,
+}
+
+/// Defaults are conservative: a tool that cries wolf gets muted, and a muted
+/// tool is a tool that missed the real thing (PRP §7).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct RuleThresholds {
+    /// `sync-stale`: alert when an institution has no successful sync in this
+    /// many days. SimpleFIN refreshes ~daily with quota, so 4, not 1.
+    pub sync_stale_days: u32,
+    /// `dormant-card-wake`: an account is dormant after this many days
+    /// without activity.
+    pub dormant_days: u32,
+    /// `balance-band`: rolling window the balance baseline is computed over.
+    pub balance_band_window_days: u32,
+    /// `large-transfer`: absolute per-transaction threshold in minor units.
+    /// `None` disables the rule — set it per tenant once real baselines
+    /// exist rather than guessing.
+    pub large_transfer_minor: Option<i64>,
+    /// `new-counterparty`: only first-ever payees at or above this amount
+    /// (minor units) fire.
+    pub new_counterparty_floor_minor: i64,
+    /// `recurring-missing`: months a series must appear in before it counts
+    /// as recurring.
+    pub recurring_min_occurrences: u32,
+    /// `recurring-missing`: +/- days around the expected day of month.
+    pub recurring_day_window: u32,
+}
+
+impl Default for RuleThresholds {
+    fn default() -> Self {
+        Self {
+            sync_stale_days: 4,
+            dormant_days: 60,
+            balance_band_window_days: 60,
+            large_transfer_minor: None,
+            new_counterparty_floor_minor: 50_000,
+            recurring_min_occurrences: 3,
+            recurring_day_window: 5,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT institution, last_successful_sync_at, fetched_at FROM upstream_health WHERE tenant_id = ? ORDER BY institution",
+  "describe": {
+    "columns": [
+      {
+        "name": "institution",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "last_successful_sync_at",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "fetched_at",
+        "ordinal": 2,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "2473f5a20d819ac138d28718468155102d4a72199b1717e1cdf0c933a95ccd8e"
+}

@@ -9,7 +9,24 @@ use chrono::{DateTime, Utc};
 use sqlx::SqliteConnection;
 
 use super::{Result, Store, StoreError, TenantId};
-use crate::domain::{Account, Holding, Transaction};
+use crate::domain::{Account, Holding, Transaction, UpstreamHealth};
+
+/// One append-only account snapshot observation, for baseline building.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountSnapshotRow {
+    pub external_id: String,
+    pub name: String,
+    pub balance_minor: i64,
+    pub as_of_date: chrono::NaiveDate,
+}
+
+/// One institution's health as recorded at the last sync.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredInstitutionHealth {
+    pub institution: String,
+    pub last_successful_sync_at: Option<DateTime<Utc>>,
+    pub fetched_at: DateTime<Utc>,
+}
 
 /// Row counts reported by an idempotent transaction upsert. `refreshed` are
 /// existing rows re-written from upstream; `skipped_stale` are incoming rows
@@ -73,12 +90,14 @@ impl Store {
         accounts: &[Account],
         transactions: &[Transaction],
         holdings: &[Holding],
+        health: &UpstreamHealth,
         now: DateTime<Utc>,
     ) -> Result<MaterializeStats> {
         let mut tx = self.pool().begin().await?;
         let account_snapshots = insert_account_snapshots_on(&mut tx, tenant, accounts, now).await?;
         let tx_stats = upsert_transactions_on(&mut tx, tenant, transactions, now).await?;
         let holding_snapshots = insert_holding_snapshots_on(&mut tx, tenant, holdings, now).await?;
+        replace_upstream_health_on(&mut tx, tenant, health).await?;
         tx.commit().await?;
         Ok(MaterializeStats {
             account_snapshots,
@@ -127,6 +146,113 @@ impl Store {
         let count = insert_holding_snapshots_on(&mut tx, tenant, holdings, as_of).await?;
         tx.commit().await?;
         Ok(count)
+    }
+
+    /// Insert findings, ignoring any whose `(tenant_id, dedupe_key)` already
+    /// exists — the same condition never re-alerts. Returns how many were new.
+    pub async fn upsert_findings(
+        &self,
+        tenant: TenantId,
+        findings: &[crate::domain::Finding],
+    ) -> Result<u64> {
+        let mut tx = self.pool().begin().await?;
+        let mut new_rows = 0u64;
+        for f in findings {
+            let severity = f.severity.as_str();
+            let evidence = f.evidence.to_string();
+            let detected_at = f.detected_at.to_rfc3339();
+            let inserted = sqlx::query!(
+                "INSERT OR IGNORE INTO finding \
+                 (tenant_id, rule_id, severity, subject, evidence, detected_at, dedupe_key) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                tenant.0,
+                f.rule_id,
+                severity,
+                f.subject,
+                evidence,
+                detected_at,
+                f.dedupe_key,
+            )
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+            new_rows += inserted;
+        }
+        tx.commit().await?;
+        Ok(new_rows)
+    }
+
+    pub async fn finding_count(&self, tenant: TenantId) -> Result<u64> {
+        let count = sqlx::query_scalar!(
+            r#"SELECT COUNT(*) as "c: i64" FROM finding WHERE tenant_id = ?"#,
+            tenant.0
+        )
+        .fetch_one(self.pool())
+        .await?;
+        Ok(count as u64)
+    }
+
+    pub async fn delivery_count(&self, tenant: TenantId) -> Result<u64> {
+        let count = sqlx::query_scalar!(
+            r#"SELECT COUNT(*) as "c: i64" FROM delivery WHERE tenant_id = ?"#,
+            tenant.0
+        )
+        .fetch_one(self.pool())
+        .await?;
+        Ok(count as u64)
+    }
+
+    /// All account snapshot observations, ascending by observation time.
+    pub async fn account_snapshot_rows(&self, tenant: TenantId) -> Result<Vec<AccountSnapshotRow>> {
+        let rows = sqlx::query!(
+            "SELECT external_id, name, balance_minor, as_of \
+             FROM account_snapshot WHERE tenant_id = ? ORDER BY as_of, external_id, id",
+            tenant.0
+        )
+        .fetch_all(self.pool())
+        .await?;
+        rows.into_iter()
+            .map(|r| {
+                Ok(AccountSnapshotRow {
+                    external_id: r.external_id,
+                    name: r.name,
+                    balance_minor: r.balance_minor,
+                    as_of_date: DateTime::parse_from_rfc3339(&r.as_of)
+                        .map_err(|e| corrupt("account_snapshot.as_of", &e))?
+                        .with_timezone(&Utc)
+                        .date_naive(),
+                })
+            })
+            .collect()
+    }
+
+    /// Current per-institution upstream health as of the last sync.
+    pub async fn upstream_health(&self, tenant: TenantId) -> Result<Vec<StoredInstitutionHealth>> {
+        let rows = sqlx::query!(
+            "SELECT institution, last_successful_sync_at, fetched_at \
+             FROM upstream_health WHERE tenant_id = ? ORDER BY institution",
+            tenant.0
+        )
+        .fetch_all(self.pool())
+        .await?;
+        rows.into_iter()
+            .map(|r| {
+                Ok(StoredInstitutionHealth {
+                    institution: r.institution,
+                    last_successful_sync_at: r
+                        .last_successful_sync_at
+                        .map(|v| {
+                            DateTime::parse_from_rfc3339(&v)
+                                .map(|dt| dt.with_timezone(&Utc))
+                                .map_err(|e| corrupt("upstream_health.last_successful_sync_at", &e))
+                        })
+                        .transpose()?,
+                    fetched_at: DateTime::parse_from_rfc3339(&r.fetched_at)
+                        .map_err(|e| corrupt("upstream_health.fetched_at", &e))?
+                        .with_timezone(&Utc),
+                })
+            })
+            .collect()
     }
 
     /// Newest posted date stored for this tenant, or `None` when empty.
@@ -334,6 +460,36 @@ async fn insert_holding_snapshots_on(
         .await?;
     }
     Ok(holdings.len() as u64)
+}
+
+/// Current-state semantics: the health table always reflects the latest sync,
+/// so institutions that disappear upstream disappear here too.
+async fn replace_upstream_health_on(
+    conn: &mut SqliteConnection,
+    tenant: TenantId,
+    health: &UpstreamHealth,
+) -> Result<()> {
+    sqlx::query!("DELETE FROM upstream_health WHERE tenant_id = ?", tenant.0)
+        .execute(&mut *conn)
+        .await?;
+    let fetched_at = health.fetched_at.to_rfc3339();
+    for institution in &health.institutions {
+        let last = institution
+            .last_successful_sync_at
+            .map(|dt| dt.to_rfc3339());
+        sqlx::query!(
+            "INSERT INTO upstream_health \
+             (tenant_id, institution, last_successful_sync_at, fetched_at) \
+             VALUES (?, ?, ?, ?)",
+            tenant.0,
+            institution.institution,
+            last,
+            fetched_at,
+        )
+        .execute(&mut *conn)
+        .await?;
+    }
+    Ok(())
 }
 
 /// A stored value failed to parse back into its domain type — the database

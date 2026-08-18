@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO finding (tenant_id, rule_id, severity, subject, evidence, detected_at, dedupe_key) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "7adea8bedf87a9b873de3f930295c1c35e7da4daccd5169b413aad047118bd9b"
+}

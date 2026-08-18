@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO upstream_health (tenant_id, institution, last_successful_sync_at, fetched_at) VALUES (?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "1df5e9c67b4739a8d06efb141c4e2bece9b8ee866866cba8c36ba48eae7767bd"
+}

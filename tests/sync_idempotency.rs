@@ -278,3 +278,52 @@ async fn future_dated_transactions_do_not_poison_the_watermark() {
         "the watermark must anchor to min(newest, now)"
     );
 }
+
+#[tokio::test]
+async fn sync_persists_upstream_health_replacing_prior_rows() {
+    use chrono::TimeZone;
+    let dir = TempDir::new().expect("tempdir");
+    let store = Store::open(&dir.path().join("t.sqlite3"))
+        .await
+        .expect("store");
+    let tenant = store.tenants().ensure("a", "A").await.expect("tenant");
+    let source =
+        FixtureSureSource::new(format!("{}/fixtures/synthetic", env!("CARGO_MANIFEST_DIR")));
+
+    let first = Utc
+        .with_ymd_and_hms(2026, 8, 17, 22, 0, 0)
+        .single()
+        .expect("ts");
+    sync_tenant(&store, tenant, &source, first, SyncOptions::default())
+        .await
+        .expect("sync 1");
+
+    let rows = store.upstream_health(tenant).await.expect("health rows");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].institution, "First National");
+    assert_eq!(
+        rows[0].last_successful_sync_at,
+        Utc.with_ymd_and_hms(2026, 8, 15, 6, 0, 5).single()
+    );
+
+    // Second sync replaces, never accumulates.
+    let second = Utc
+        .with_ymd_and_hms(2026, 8, 18, 22, 0, 0)
+        .single()
+        .expect("ts");
+    sync_tenant(&store, tenant, &source, second, SyncOptions::default())
+        .await
+        .expect("sync 2");
+    let rows = store.upstream_health(tenant).await.expect("health rows");
+    assert_eq!(rows.len(), 1, "health is current state, not history");
+
+    // And it is tenant-scoped like everything else.
+    let other = store.tenants().ensure("b", "B").await.expect("tenant b");
+    assert!(
+        store
+            .upstream_health(other)
+            .await
+            .expect("empty")
+            .is_empty()
+    );
+}
