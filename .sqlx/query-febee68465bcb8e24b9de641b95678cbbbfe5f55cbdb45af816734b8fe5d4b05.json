@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO account_snapshot (tenant_id, external_id, name, institution, kind, status, balance_minor, currency, as_of) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 9
+    },
+    "nullable": []
+  },
+  "hash": "febee68465bcb8e24b9de641b95678cbbbfe5f55cbdb45af816734b8fe5d4b05"
+}

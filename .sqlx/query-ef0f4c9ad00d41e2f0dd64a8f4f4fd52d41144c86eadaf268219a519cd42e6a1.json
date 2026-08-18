@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE transactions SET account_external_id = ?, posted_at = ?, amount_minor = ?, currency = ?, description = ?, category = ?, counterparty_key = ?, is_transfer = ?, updated_at = ? WHERE tenant_id = ? AND external_id = ? AND updated_at <= ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 12
+    },
+    "nullable": []
+  },
+  "hash": "ef0f4c9ad00d41e2f0dd64a8f4f4fd52d41144c86eadaf268219a519cd42e6a1"
+}

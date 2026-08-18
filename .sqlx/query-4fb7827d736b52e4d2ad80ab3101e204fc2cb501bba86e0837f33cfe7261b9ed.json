@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT external_id, account_external_id, posted_at, amount_minor, currency, description, category, counterparty_key, is_transfer, updated_at FROM transactions WHERE tenant_id = ? ORDER BY posted_at, external_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "external_id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "account_external_id",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "posted_at",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "amount_minor",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "currency",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "description",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "category",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "counterparty_key",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "is_transfer",
+        "ordinal": 8,
+        "type_info": "Integer"
+      },
+      {
+        "name": "updated_at",
+        "ordinal": 9,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "4fb7827d736b52e4d2ad80ab3101e204fc2cb501bba86e0837f33cfe7261b9ed"
+}

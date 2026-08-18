@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) as \"c: i64\" FROM account_snapshot WHERE tenant_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "c: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "b2625793f83a3a2b7afe48342c9581153a26a7ae6cc0fe368fc7f69d68c6bb4c"
+}
