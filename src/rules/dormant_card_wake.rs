@@ -34,6 +34,14 @@ impl Rule for DormantCardWake {
                         rule_id: self.id().to_string(),
                         severity: Severity::Warn,
                         subject: format!("account:{}", ctx.account_name(&t.account_external_id)),
+                        summary: format!(
+                            "{} woke after {} quiet days: {} \u{2018}{}\u{2019} on {}.",
+                            ctx.account_name(&t.account_external_id),
+                            gap_days,
+                            crate::domain::format_minor(t.amount_minor, &t.currency),
+                            t.description,
+                            t.posted_at,
+                        ),
                         evidence: json!({
                             "account_external_id": t.account_external_id,
                             "gap_days": gap_days,

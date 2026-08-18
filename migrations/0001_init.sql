@@ -77,8 +77,10 @@ CREATE TABLE finding (
     rule_id         TEXT NOT NULL,
     severity        TEXT NOT NULL CHECK (severity IN ('info', 'warn', 'alert')),
     subject         TEXT NOT NULL,
+    summary         TEXT NOT NULL,  -- one human-readable sentence, written by the rule
     evidence        TEXT NOT NULL,  -- JSON
     detected_at     TEXT NOT NULL,
+    last_seen_at    TEXT NOT NULL,  -- refreshed when the same condition is re-detected
     dedupe_key      TEXT NOT NULL,
     acknowledged_at TEXT,
     UNIQUE (tenant_id, dedupe_key)

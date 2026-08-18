@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT rule_id, severity, subject, summary, evidence, detected_at, last_seen_at, dedupe_key FROM finding WHERE tenant_id = ? AND last_seen_at >= ? AND detected_at <= ? AND acknowledged_at IS NULL ORDER BY detected_at, dedupe_key",
+  "describe": {
+    "columns": [
+      {
+        "name": "rule_id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "severity",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "subject",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "summary",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "evidence",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "detected_at",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "last_seen_at",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "dedupe_key",
+        "ordinal": 7,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "f66124c97c808352456d49acfb114930388d50a4afca0340bd7bdf7769b8b5d6"
+}

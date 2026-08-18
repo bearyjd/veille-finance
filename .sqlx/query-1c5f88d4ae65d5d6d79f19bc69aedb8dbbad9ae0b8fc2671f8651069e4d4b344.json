@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE finding SET last_seen_at = ? WHERE tenant_id = ? AND dedupe_key = ? AND last_seen_at < ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "1c5f88d4ae65d5d6d79f19bc69aedb8dbbad9ae0b8fc2671f8651069e4d4b344"
+}

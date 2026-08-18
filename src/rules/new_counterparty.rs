@@ -42,6 +42,12 @@ impl Rule for NewCounterparty {
                 rule_id: self.id().to_string(),
                 severity: Severity::Warn,
                 subject: format!("counterparty:{key}"),
+                summary: format!(
+                    "First-ever payee \u{2018}{}\u{2019}: {} on {}.",
+                    t.description,
+                    crate::domain::format_minor(t.amount_minor, &t.currency),
+                    t.posted_at,
+                ),
                 evidence: json!({
                     "counterparty": key,
                     "amount_minor": t.amount_minor,

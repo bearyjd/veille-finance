@@ -147,6 +147,13 @@ impl Rule for RecurringMissing {
                 rule_id: self.id().to_string(),
                 severity: Severity::Warn,
                 subject: format!("counterparty:{counterparty}"),
+                summary: format!(
+                    "Expected monthly \u{2018}{}\u{2019} (about {} around day {}) has not appeared for {}.",
+                    counterparty,
+                    crate::domain::format_minor(last.amount_minor, &last.currency),
+                    expected_day,
+                    format_month(expected_month),
+                ),
                 evidence: json!({
                     "counterparty": counterparty,
                     "expected_month": format_month(expected_month),
