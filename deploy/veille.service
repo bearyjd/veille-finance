@@ -1,0 +1,13 @@
+# /etc/systemd/system/veille.service — compose variant (docs/deployment.md).
+# Root because it drives the docker socket; secrets stay in /etc/veille/env
+# (root:root 0600) and are consumed by compose variable substitution.
+[Unit]
+Description=veille watch cycle (compose)
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/veille/env
+WorkingDirectory=/opt/veille/repo/deploy
+ExecStart=/usr/bin/docker compose run --rm veille run --once

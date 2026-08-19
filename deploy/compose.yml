@@ -1,0 +1,192 @@
+# veille deployment: two tenant Sure stacks + veille in ONE compose project
+# (PRP §4, ADR-001). Tenants here are named `alpha` and `beta` — rename to
+# your tenant slugs (they must match `config/veille.toml`).
+#
+#   docker compose --env-file /etc/veille/env up -d          # both Sure stacks
+#   docker compose --env-file /etc/veille/env run --rm veille run --once
+#
+# Secrets come ONLY from the env file (root:root 0600). `${VAR:?}` makes a
+# missing secret a startup error, never an empty default. veille joins both
+# tenant networks and publishes no ports (PRP §2.6). No MCP_* variables:
+# veille talks /api/v1 with read-scoped keys (ADR-001).
+
+x-sure-image: &sure_image
+  # Pin by digest after validating an image bump (docs/phase0/rig/probe_mcp.sh
+  # doubles as the contract test): SURE_IMAGE=ghcr.io/we-promise/sure@sha256:…
+  image: ${SURE_IMAGE:-ghcr.io/we-promise/sure:stable}
+
+x-alpha-db-env: &alpha_db_env
+  POSTGRES_USER: sure_user
+  POSTGRES_PASSWORD: ${ALPHA_POSTGRES_PASSWORD:?}
+  POSTGRES_DB: sure_production
+
+x-alpha-rails-env: &alpha_rails_env
+  <<: *alpha_db_env
+  SECRET_KEY_BASE: ${ALPHA_SECRET_KEY_BASE:?}
+  SELF_HOSTED: "true"
+  # Tailscale-only host; TLS termination is the tailnet's problem.
+  RAILS_FORCE_SSL: "false"
+  RAILS_ASSUME_SSL: "false"
+  DB_HOST: alpha-db
+  DB_PORT: 5432
+  REDIS_URL: redis://alpha-redis:6379/1
+
+x-beta-db-env: &beta_db_env
+  POSTGRES_USER: sure_user
+  POSTGRES_PASSWORD: ${BETA_POSTGRES_PASSWORD:?}
+  POSTGRES_DB: sure_production
+
+x-beta-rails-env: &beta_rails_env
+  <<: *beta_db_env
+  SECRET_KEY_BASE: ${BETA_SECRET_KEY_BASE:?}
+  SELF_HOSTED: "true"
+  RAILS_FORCE_SSL: "false"
+  RAILS_ASSUME_SSL: "false"
+  DB_HOST: beta-db
+  DB_PORT: 5432
+  REDIS_URL: redis://beta-redis:6379/1
+
+services:
+  # ── tenant: alpha ────────────────────────────────────────────────
+  alpha-web:
+    <<: *sure_image
+    volumes:
+      - alpha-app-storage:/rails/storage
+    ports:
+      - "127.0.0.1:3001:3000"
+    environment:
+      <<: *alpha_rails_env
+    depends_on:
+      alpha-db:
+        condition: service_healthy
+      alpha-redis:
+        condition: service_healthy
+    networks: [alpha_net]
+
+  alpha-worker:
+    <<: *sure_image
+    command: bundle exec sidekiq
+    volumes:
+      - alpha-app-storage:/rails/storage
+    environment:
+      <<: *alpha_rails_env
+    depends_on:
+      alpha-db:
+        condition: service_healthy
+      alpha-redis:
+        condition: service_healthy
+    networks: [alpha_net]
+
+  alpha-db:
+    image: docker.io/library/postgres:16
+    volumes:
+      - alpha-postgres-data:/var/lib/postgresql/data
+    environment:
+      <<: *alpha_db_env
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks: [alpha_net]
+
+  alpha-redis:
+    image: docker.io/library/redis:7
+    volumes:
+      - alpha-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks: [alpha_net]
+
+  # ── tenant: beta ─────────────────────────────────────────────────
+  beta-web:
+    <<: *sure_image
+    volumes:
+      - beta-app-storage:/rails/storage
+    ports:
+      - "127.0.0.1:3002:3000"
+    environment:
+      <<: *beta_rails_env
+    depends_on:
+      beta-db:
+        condition: service_healthy
+      beta-redis:
+        condition: service_healthy
+    networks: [beta_net]
+
+  beta-worker:
+    <<: *sure_image
+    command: bundle exec sidekiq
+    volumes:
+      - beta-app-storage:/rails/storage
+    environment:
+      <<: *beta_rails_env
+    depends_on:
+      beta-db:
+        condition: service_healthy
+      beta-redis:
+        condition: service_healthy
+    networks: [beta_net]
+
+  beta-db:
+    image: docker.io/library/postgres:16
+    volumes:
+      - beta-postgres-data:/var/lib/postgresql/data
+    environment:
+      <<: *beta_db_env
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks: [beta_net]
+
+  beta-redis:
+    image: docker.io/library/redis:7
+    volumes:
+      - beta-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks: [beta_net]
+
+  # ── veille ───────────────────────────────────────────────────────
+  veille:
+    build:
+      context: ..
+    profiles:
+      - veille   # never started by a plain `up`; only via `run --rm veille …`
+    volumes:
+      - veille-store:/var/lib/veille
+      - /etc/veille/veille.toml:/etc/veille/veille.toml:ro
+    environment:
+      # base_url per tenant in veille.toml: http://alpha-web:3000 etc.
+      VEILLE_API_KEY_ALPHA: ${VEILLE_API_KEY_ALPHA:?}
+      VEILLE_API_KEY_BETA: ${VEILLE_API_KEY_BETA:?}
+      VEILLE_SMTP_USERNAME: ${VEILLE_SMTP_USERNAME:-}
+      VEILLE_SMTP_PASSWORD: ${VEILLE_SMTP_PASSWORD:-}
+      VEILLE_LLM_BASE_URL: ${VEILLE_LLM_BASE_URL:-}
+      VEILLE_LLM_API_KEY: ${VEILLE_LLM_API_KEY:-}
+      VEILLE_LLM_MODEL: ${VEILLE_LLM_MODEL:-}
+    command: ["--config", "/etc/veille/veille.toml", "run", "--once"]
+    networks: [alpha_net, beta_net]
+
+volumes:
+  alpha-app-storage:
+  alpha-postgres-data:
+  alpha-redis-data:
+  beta-app-storage:
+  beta-postgres-data:
+  beta-redis-data:
+  veille-store:
+
+networks:
+  alpha_net:
+    driver: bridge
+  beta_net:
+    driver: bridge
