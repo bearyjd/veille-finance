@@ -70,7 +70,11 @@ systemd never overlaps starts of the same service unit, which is the
 concurrency assumption the delivery idempotency relies on. Run exactly one
 unit per store file.
 
-For the Docker deployment, `ExecStart` becomes:
+For the Docker deployment, `ExecStart` becomes a `compose run` — see
+`deploy/` for the canonical **all-compose** layout (both tenant Sure stacks
+and veille in one project, ready-made service/timer units, env template).
+For a single-tenant setup overlaying an existing Sure compose file,
+`compose.veille.yml` at the repo root still applies:
 
 ```
 docker compose -f /opt/sure/compose.yml -f /opt/veille/compose.veille.yml run --rm veille run --once

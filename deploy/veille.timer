@@ -1,0 +1,14 @@
+# /etc/systemd/system/veille.timer — one timer, one unit, one store file.
+# systemd never overlaps starts of the same service unit; that non-overlap is
+# the concurrency guarantee veille's delivery idempotency relies on.
+[Unit]
+Description=daily veille cycle
+
+[Timer]
+# Late in the day: SimpleFIN refreshes ~daily at bank-dependent times
+# (PRP appendix A) — do not poll aggressively.
+OnCalendar=*-*-* 21:30
+Persistent=true
+
+[Install]
+WantedBy=timers.target
