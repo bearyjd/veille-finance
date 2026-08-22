@@ -38,41 +38,59 @@ impl Rule for DuplicateCharge {
 
         let mut findings = Vec::new();
         for ((account, counterparty, amount_minor), txns) in clusters {
-            // Context transactions are ascending (posted_at, external_id), so
-            // adjacent pairs are the closest-in-time candidates.
-            let Some(pair) = txns
-                .windows(2)
-                .find(|p| (p[1].posted_at - p[0].posted_at).num_days() <= window)
-            else {
-                continue;
-            };
-            let (first, second) = (pair[0], pair[1]);
-            findings.push(Finding {
-                rule_id: self.id().to_string(),
-                severity: Severity::Warn,
-                subject: format!("account:{}", ctx.account_name(account)),
-                summary: format!(
-                    "\u{2018}{}\u{2019} charged {} twice within {} day(s): {} and {}.",
-                    counterparty,
-                    crate::domain::format_minor(amount_minor, &first.currency),
-                    window,
-                    first.posted_at,
-                    second.posted_at,
-                ),
-                evidence: json!({
-                    "account": account,
-                    "counterparty": counterparty,
-                    "amount_minor": amount_minor,
-                    "currency": first.currency,
-                    "occurrences": txns.iter().map(|t| t.posted_at.to_string()).collect::<Vec<_>>(),
-                    "window_days": window,
-                }),
-                dedupe_key: format!(
-                    "duplicate-charge:{account}:{counterparty}:{amount_minor}:{}",
-                    first.posted_at
-                ),
-                detected_at: ctx.now,
-            });
+            // Split cluster into maximal temporal chains: a txn joins the current
+            // chain when its gap from the chain's previous txn is <= window days,
+            // else starts a new chain.
+            let mut chains: Vec<Vec<&Transaction>> = Vec::new();
+            for txn in txns {
+                if let Some(last_chain) = chains.last_mut()
+                    && let Some(last_txn) = last_chain.last()
+                {
+                    let gap = (txn.posted_at - last_txn.posted_at).num_days();
+                    if gap <= window {
+                        last_chain.push(txn);
+                        continue;
+                    }
+                }
+                chains.push(vec![txn]);
+            }
+
+            // Each chain with >= 2 members emits one finding, scoped to that chain.
+            for chain in chains {
+                if chain.len() < 2 {
+                    continue;
+                }
+                let (first, second) = (chain[0], chain[1]);
+                findings.push(Finding {
+                    rule_id: self.id().to_string(),
+                    severity: Severity::Warn,
+                    subject: format!("account:{}", ctx.account_name(account)),
+                    summary: format!(
+                        "\u{2018}{}\u{2019} charged {} twice within {} day(s): {} and {}.",
+                        counterparty,
+                        crate::domain::format_minor(amount_minor, &first.currency),
+                        window,
+                        first.posted_at,
+                        second.posted_at,
+                    ),
+                    evidence: json!({
+                        "account": account,
+                        "counterparty": counterparty,
+                        "amount_minor": amount_minor,
+                        "currency": first.currency,
+                        "occurrences": chain
+                            .iter()
+                            .map(|t| t.posted_at.to_string())
+                            .collect::<Vec<_>>(),
+                        "window_days": window,
+                    }),
+                    dedupe_key: format!(
+                        "duplicate-charge:{account}:{counterparty}:{amount_minor}:{}",
+                        first.posted_at
+                    ),
+                    detected_at: ctx.now,
+                });
+            }
         }
         findings
     }
@@ -205,5 +223,54 @@ mod tests {
         ]);
         ctx.thresholds.duplicate_window_days = 10;
         assert_eq!(DuplicateCharge.evaluate(&ctx).len(), 1);
+    }
+
+    #[test]
+    fn two_separate_incidents_emit_two_findings() {
+        let txns = vec![
+            txn("d1", "a1", "2026-07-20", -12_999, "Streaming Co"),
+            txn("d2", "a1", "2026-07-21", -12_999, "Streaming Co"),
+            txn("d3", "a1", "2026-08-10", -12_999, "Streaming Co"),
+            txn("d4", "a1", "2026-08-11", -12_999, "Streaming Co"),
+        ];
+        let findings = DuplicateCharge.evaluate(&ctx_with_transactions(txns));
+        assert_eq!(findings.len(), 2);
+        assert_eq!(
+            findings[0].dedupe_key,
+            "duplicate-charge:a1:streaming co:-12999:2026-07-20"
+        );
+        assert_eq!(
+            findings[1].dedupe_key,
+            "duplicate-charge:a1:streaming co:-12999:2026-08-10"
+        );
+        assert_eq!(
+            findings[0].evidence["occurrences"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            findings[1].evidence["occurrences"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn occurrences_are_scoped_to_the_incident() {
+        let txns = vec![
+            txn("d1", "a1", "2026-07-25", -12_999, "Streaming Co"),
+            txn("d2", "a1", "2026-08-10", -12_999, "Streaming Co"),
+            txn("d3", "a1", "2026-08-11", -12_999, "Streaming Co"),
+        ];
+        let findings = DuplicateCharge.evaluate(&ctx_with_transactions(txns));
+        assert_eq!(findings.len(), 1);
+        let occurrences = findings[0].evidence["occurrences"].as_array().unwrap();
+        assert_eq!(occurrences.len(), 2);
+        assert_eq!(occurrences[0].as_str(), Some("2026-08-10"));
+        assert_eq!(occurrences[1].as_str(), Some("2026-08-11"));
     }
 }
