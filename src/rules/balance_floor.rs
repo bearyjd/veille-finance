@@ -6,9 +6,9 @@
 //!
 //! Liability accounts are exempt: an account whose typical observed balance
 //! is negative (credit cards, lines of credit) lives below any cash floor by
-//! nature. The exemption keys on the median of the history, not "ever
+//! nature. The exemption keys on the median of PRIOR history, not "ever
 //! negative" — a checking account that once overdrafted is exactly the
-//! account this rule must keep watching.
+//! account this rule must keep watching. A first observation is never judged.
 
 use serde_json::json;
 
@@ -28,10 +28,13 @@ impl Rule for BalanceFloor {
         };
         let mut findings = Vec::new();
         for (account_id, series) in &ctx.balances {
-            let Some(latest) = series.last() else {
+            let Some((latest, history)) = series.split_last() else {
                 continue;
             };
-            if median_minor(series.iter().map(|p| p.balance_minor)) < 0 {
+            if history.is_empty() {
+                continue;
+            }
+            if median_minor(history.iter().map(|p| p.balance_minor)) < 0 {
                 continue;
             }
             if latest.balance_minor >= floor {
@@ -118,7 +121,7 @@ mod tests {
 
     #[test]
     fn silent_at_or_above_the_floor() {
-        let ctx = ctx_with_series("a1", &[("2026-08-17", 50_000)]);
+        let ctx = ctx_with_series("a1", &[("2026-08-16", 90_000), ("2026-08-17", 50_000)]);
         assert!(BalanceFloor.evaluate(&ctx).is_empty());
     }
 
@@ -144,6 +147,25 @@ mod tests {
     }
 
     #[test]
+    fn first_observation_is_never_judged() {
+        // Single observation (no prior history) is never judged, whether positive or negative.
+        let ctx_positive = ctx_with_series("a1", &[("2026-08-16", 1_000)]);
+        assert!(BalanceFloor.evaluate(&ctx_positive).is_empty());
+
+        let ctx_negative = ctx_with_series("a2", &[("2026-08-16", -120_000)]);
+        assert!(BalanceFloor.evaluate(&ctx_negative).is_empty());
+    }
+
+    #[test]
+    fn overdraft_after_one_healthy_day_fires() {
+        // History median positive (50_000), latest negative: this is the emergency.
+        let ctx = ctx_with_series("a1", &[("2026-08-15", 50_000), ("2026-08-16", -500_000)]);
+        let findings = BalanceFloor.evaluate(&ctx);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].evidence["balance_minor"], -500_000);
+    }
+
+    #[test]
     fn an_overdrafted_checking_account_still_fires() {
         // Median positive, latest negative: this is the emergency, not an
         // exemption.
@@ -162,8 +184,15 @@ mod tests {
 
     #[test]
     fn dedupe_key_is_stable_across_days() {
-        let day_one = ctx_with_series("a1", &[("2026-08-16", 30_000)]);
-        let day_two = ctx_with_series("a1", &[("2026-08-16", 30_000), ("2026-08-17", 20_000)]);
+        let day_one = ctx_with_series("a1", &[("2026-08-15", 90_000), ("2026-08-16", 30_000)]);
+        let day_two = ctx_with_series(
+            "a1",
+            &[
+                ("2026-08-15", 90_000),
+                ("2026-08-16", 30_000),
+                ("2026-08-17", 20_000),
+            ],
+        );
         assert_eq!(
             BalanceFloor.evaluate(&day_one)[0].dedupe_key,
             BalanceFloor.evaluate(&day_two)[0].dedupe_key,
