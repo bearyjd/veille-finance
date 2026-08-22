@@ -10,6 +10,7 @@ pub mod duplicate_charge;
 pub mod large_transfer;
 pub mod new_counterparty;
 pub mod recurring_missing;
+pub(crate) mod series;
 pub mod sync_stale;
 
 use std::collections::BTreeMap;

@@ -12,6 +12,7 @@
 
 use serde_json::json;
 
+use super::series;
 use super::{EvalContext, Rule};
 use crate::domain::{Finding, Severity};
 
@@ -23,113 +24,33 @@ impl Rule for RecurringMissing {
     }
 
     fn evaluate(&self, ctx: &EvalContext) -> Vec<Finding> {
-        use std::collections::{BTreeMap, BTreeSet};
-
         use chrono::Datelike;
 
-        use crate::domain::Transaction;
-
-        let min_occurrences = ctx.thresholds.recurring_min_occurrences as usize;
-        if min_occurrences == 0 {
-            return Vec::new();
-        }
         let day_window = i64::from(ctx.thresholds.recurring_day_window);
         let today = ctx.now.date_naive();
         let current_month = (today.year(), today.month());
-        let previous_month = prev_month(current_month);
-
-        // Transfers count: a bill paid by internal transfer is still paid,
-        // and a missed automated savings transfer is a missed deposit.
-        let mut by_counterparty: BTreeMap<&str, Vec<&Transaction>> = BTreeMap::new();
-        for t in &ctx.transactions {
-            if let Some(key) = t.counterparty_key.as_deref() {
-                by_counterparty.entry(key).or_default().push(t);
-            }
-        }
+        let previous_month = series::prev_month(current_month);
 
         let mut findings = Vec::new();
-        for (counterparty, occurrences) in by_counterparty {
-            let Some(last) = occurrences.last() else {
-                continue;
-            };
-            let last_month = (last.posted_at.year(), last.posted_at.month());
-
+        for s in series::monthly_series(ctx) {
             // The month after the streak is the one owed a payment. Judge
             // only the current and immediately previous months: a series
             // that died long ago must not alert forever. This also handles
             // "the bill arrived": its month joins the streak and the
             // expected month moves into the future.
-            let expected_month = next_month(last_month);
+            let expected_month = series::next_month(s.last_month);
             if expected_month != current_month && expected_month != previous_month {
                 continue;
             }
 
-            // Streak: each of the last `min_occurrences` calendar months up
-            // to and including the last occurrence's month has activity.
-            let months: BTreeSet<(i32, u32)> = occurrences
-                .iter()
-                .map(|t| (t.posted_at.year(), t.posted_at.month()))
-                .collect();
-            let mut month = last_month;
-            let streak_complete = (0..min_occurrences).all(|_| {
-                let hit = months.contains(&month);
-                month = prev_month(month);
-                hit
-            });
-            if !streak_complete {
-                continue;
-            }
-
-            // One representative per streak month, so an unrelated extra
-            // charge at the same counterparty cannot displace a month from
-            // the statistics: the representative is the occurrence closest
-            // in amount to the streak-wide median (later date breaks ties).
-            let streak_months: BTreeSet<(i32, u32)> = {
-                let mut set = BTreeSet::new();
-                let mut m = last_month;
-                for _ in 0..min_occurrences {
-                    set.insert(m);
-                    m = prev_month(m);
-                }
-                set
-            };
-            let in_streak: Vec<&&Transaction> = occurrences
-                .iter()
-                .filter(|t| streak_months.contains(&(t.posted_at.year(), t.posted_at.month())))
-                .collect();
-            let global_median = median_u128(
-                in_streak
-                    .iter()
-                    .map(|t| u128::from(t.amount_minor.unsigned_abs()))
-                    .collect(),
-            );
-            let representatives: Vec<&&Transaction> = streak_months
-                .iter()
-                .filter_map(|month| {
-                    in_streak
-                        .iter()
-                        .filter(|t| (t.posted_at.year(), t.posted_at.month()) == *month)
-                        .min_by_key(|t| {
-                            let amount = u128::from(t.amount_minor.unsigned_abs());
-                            let distance = amount.abs_diff(global_median);
-                            (distance, std::cmp::Reverse(t.posted_at))
-                        })
-                        .copied()
-                })
-                .collect();
-
             // Regularity separates a bill or paycheck from variable spending:
             // across the representatives, max ≤ 1.5 × min.
-            let amounts: Vec<u128> = representatives
+            let amounts: Vec<u128> = s
+                .representatives
                 .iter()
                 .map(|t| u128::from(t.amount_minor.unsigned_abs()))
                 .collect();
-            let (Some(&min_amount), Some(&max_amount)) =
-                (amounts.iter().min(), amounts.iter().max())
-            else {
-                continue;
-            };
-            if min_amount == 0 || max_amount * 2 > min_amount * 3 {
+            if !series::amounts_regular(&amounts) {
                 continue;
             }
 
@@ -137,17 +58,24 @@ impl Rule for RecurringMissing {
             // Sunday digest, but a missed deposit (pension, payroll, Social
             // Security) is the most time-critical signal this tool watches —
             // Alert, so the push channel carries it the same day.
-            let is_inflow = representatives.iter().all(|t| t.amount_minor > 0);
+            let is_inflow = s.representatives.iter().all(|t| t.amount_minor > 0);
 
-            let mut days: Vec<u32> = representatives.iter().map(|t| t.posted_at.day()).collect();
+            let mut days: Vec<u32> = s
+                .representatives
+                .iter()
+                .map(|t| t.posted_at.day())
+                .collect();
             days.sort_unstable();
-            let expected_day = median_day(&days);
+            let expected_day = series::median_day(&days);
 
-            let due_by =
-                clamp_to_month(expected_month, expected_day) + chrono::Duration::days(day_window);
+            let due_by = series::clamp_to_month(expected_month, expected_day)
+                + chrono::Duration::days(day_window);
             if today <= due_by {
                 continue;
             }
+
+            let counterparty = s.counterparty;
+            let last = s.last;
 
             findings.push(Finding {
                 rule_id: self.id().to_string(),
@@ -162,85 +90,29 @@ impl Rule for RecurringMissing {
                     counterparty,
                     crate::domain::format_minor(last.amount_minor, &last.currency),
                     expected_day,
-                    format_month(expected_month),
+                    series::format_month(expected_month),
                 ),
                 evidence: json!({
                     "counterparty": counterparty,
-                    "expected_month": format_month(expected_month),
+                    "expected_month": series::format_month(expected_month),
                     "expected_day": expected_day,
                     "day_window": day_window,
                     "due_by": due_by.to_string(),
                     "last_seen": last.posted_at.to_string(),
-                    "months_in_streak": min_occurrences,
+                    "months_in_streak": ctx.thresholds.recurring_min_occurrences,
                     "typical_amount_minor": last.amount_minor,
                     "currency": last.currency,
                     "direction": if is_inflow { "inflow" } else { "outflow" },
                 }),
                 dedupe_key: format!(
                     "recurring-missing:{counterparty}:{}",
-                    format_month(expected_month)
+                    series::format_month(expected_month)
                 ),
                 detected_at: ctx.now,
             });
         }
         findings
     }
-}
-
-/// Median of sorted day-of-month values: middle element for odd counts, the
-/// midpoint of the two middle elements for even counts.
-fn median_day(sorted_days: &[u32]) -> u32 {
-    let n = sorted_days.len();
-    if n == 0 {
-        return 1;
-    }
-    if n % 2 == 1 {
-        sorted_days[n / 2]
-    } else {
-        (sorted_days[n / 2 - 1] + sorted_days[n / 2]) / 2
-    }
-}
-
-fn median_u128(mut values: Vec<u128>) -> u128 {
-    if values.is_empty() {
-        return 0;
-    }
-    values.sort_unstable();
-    let n = values.len();
-    if n % 2 == 1 {
-        values[n / 2]
-    } else {
-        (values[n / 2 - 1] + values[n / 2]) / 2
-    }
-}
-
-fn next_month((year, month): (i32, u32)) -> (i32, u32) {
-    if month == 12 {
-        (year + 1, 1)
-    } else {
-        (year, month + 1)
-    }
-}
-
-fn prev_month((year, month): (i32, u32)) -> (i32, u32) {
-    if month == 1 {
-        (year - 1, 12)
-    } else {
-        (year, month - 1)
-    }
-}
-
-fn format_month((year, month): (i32, u32)) -> String {
-    format!("{year:04}-{month:02}")
-}
-
-/// The expected day, clamped into the month (day 31 in February becomes the
-/// month's last day).
-fn clamp_to_month((year, month): (i32, u32), day: u32) -> chrono::NaiveDate {
-    (1..=day.max(1))
-        .rev()
-        .find_map(|d| chrono::NaiveDate::from_ymd_opt(year, month, d))
-        .unwrap_or(chrono::NaiveDate::MIN)
 }
 
 #[cfg(test)]
