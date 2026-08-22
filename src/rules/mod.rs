@@ -4,6 +4,7 @@
 //! de-escalates one (PRP §2.4).
 
 pub mod balance_band;
+pub mod balance_floor;
 pub mod dormant_card_wake;
 pub mod duplicate_charge;
 pub mod large_transfer;
@@ -98,6 +99,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(balance_band::BalanceBand),
         Box::new(recurring_missing::RecurringMissing),
         Box::new(duplicate_charge::DuplicateCharge),
+        Box::new(balance_floor::BalanceFloor),
     ]
 }
 

@@ -144,6 +144,10 @@ pub struct RuleThresholds {
     /// `duplicate-charge`: identical charges below this amount (minor units)
     /// are routine, not a defect — two identical coffees must stay quiet.
     pub duplicate_floor_minor: i64,
+    /// `balance-floor`: alert when a cash account's latest balance is below
+    /// this absolute amount (minor units). `None` disables the rule — set it
+    /// per tenant to the account owner's real comfort line.
+    pub balance_floor_minor: Option<i64>,
 }
 
 impl Default for RuleThresholds {
@@ -158,6 +162,7 @@ impl Default for RuleThresholds {
             recurring_day_window: 5,
             duplicate_window_days: 3,
             duplicate_floor_minor: 2_500,
+            balance_floor_minor: None,
         }
     }
 }
