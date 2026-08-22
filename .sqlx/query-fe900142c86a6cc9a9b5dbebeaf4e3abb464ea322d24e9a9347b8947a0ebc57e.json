@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT external_id, name, balance_minor, currency, as_of FROM account_snapshot WHERE tenant_id = ? AND as_of <= ? ORDER BY as_of, external_id, id",
+  "query": "SELECT external_id, name, balance_minor, currency, as_of, kind FROM account_snapshot WHERE tenant_id = ? AND as_of <= ? ORDER BY as_of, external_id, id",
   "describe": {
     "columns": [
       {
@@ -27,6 +27,11 @@
         "name": "as_of",
         "ordinal": 4,
         "type_info": "Text"
+      },
+      {
+        "name": "kind",
+        "ordinal": 5,
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -37,8 +42,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "245a114d980f304a55b081dad584ab7f6432f3f7ea05e66f2c73521b3b82dc7a"
+  "hash": "fe900142c86a6cc9a9b5dbebeaf4e3abb464ea322d24e9a9347b8947a0ebc57e"
 }

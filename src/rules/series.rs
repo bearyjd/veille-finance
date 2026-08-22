@@ -182,3 +182,132 @@ pub(crate) fn clamp_to_month((year, month): (i32, u32), day: u32) -> chrono::Nai
         .find_map(|d| chrono::NaiveDate::from_ymd_opt(year, month, d))
         .unwrap_or(chrono::NaiveDate::MIN)
 }
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use crate::rules::test_support::{ctx_with_transactions, txn};
+
+    #[test]
+    fn next_month_rolls_over_the_year() {
+        assert_eq!(next_month((2026, 12)), (2027, 1));
+    }
+
+    #[test]
+    fn prev_month_rolls_back_the_year() {
+        assert_eq!(prev_month((2026, 1)), (2025, 12));
+    }
+
+    #[test]
+    fn clamp_to_month_caps_at_the_months_last_day() {
+        assert_eq!(
+            clamp_to_month((2026, 2), 31),
+            chrono::NaiveDate::from_ymd_opt(2026, 2, 28).expect("date")
+        );
+        assert_eq!(
+            clamp_to_month((2026, 4), 31),
+            chrono::NaiveDate::from_ymd_opt(2026, 4, 30).expect("date")
+        );
+    }
+
+    #[test]
+    fn median_day_odd_count_is_the_middle_element() {
+        assert_eq!(median_day(&[1, 15, 30]), 15);
+    }
+
+    #[test]
+    fn median_day_even_count_is_the_midpoint() {
+        assert_eq!(median_day(&[1, 2, 28, 29]), 15);
+    }
+
+    #[test]
+    fn median_u128_odd_count_is_the_middle_element() {
+        assert_eq!(median_u128(vec![10, 30, 20]), 20);
+    }
+
+    #[test]
+    fn median_u128_even_count_is_the_midpoint() {
+        assert_eq!(median_u128(vec![10, 20, 30, 40]), 25);
+    }
+
+    #[test]
+    fn median_u128_empty_is_zero() {
+        assert_eq!(median_u128(vec![]), 0);
+    }
+
+    #[test]
+    fn amounts_regular_rejects_an_empty_slice() {
+        assert!(!amounts_regular(&[]));
+    }
+
+    #[test]
+    fn amounts_regular_rejects_a_zero_amount() {
+        assert!(!amounts_regular(&[0, 100]));
+    }
+
+    #[test]
+    fn amounts_regular_accepts_the_exact_boundary() {
+        // max * 2 == min * 3: 3_000 * 2 == 2_000 * 3.
+        assert!(amounts_regular(&[2_000, 3_000]));
+    }
+
+    #[test]
+    fn amounts_regular_rejects_just_past_the_boundary() {
+        assert!(!amounts_regular(&[2_000, 3_001]));
+    }
+
+    #[test]
+    fn three_month_consecutive_streak_yields_one_series() {
+        let txns = vec![
+            txn("m1", "a1", "2026-05-05", -9_000, "City Electric"),
+            txn("m2", "a1", "2026-06-04", -9_500, "City Electric"),
+            txn("m3", "a1", "2026-07-06", -9_200, "City Electric"),
+        ];
+        let ctx = ctx_with_transactions(txns);
+        let series = monthly_series(&ctx);
+        assert_eq!(series.len(), 1);
+        assert_eq!(series[0].counterparty, "city electric");
+        assert_eq!(series[0].representatives.len(), 3);
+        assert_eq!(series[0].last_month, (2026, 7));
+    }
+
+    #[test]
+    fn non_consecutive_months_yield_no_series() {
+        let txns = vec![
+            txn("m1", "a1", "2026-03-05", -9_000, "Quarterly Thing"),
+            txn("m2", "a1", "2026-05-05", -9_000, "Quarterly Thing"),
+            txn("m3", "a1", "2026-07-06", -9_200, "Quarterly Thing"),
+        ];
+        let ctx = ctx_with_transactions(txns);
+        assert!(monthly_series(&ctx).is_empty());
+    }
+
+    #[test]
+    fn an_extra_irregular_charge_does_not_displace_the_representative() {
+        let mut txns = vec![
+            txn("m1", "a1", "2026-05-05", -9_000, "City Electric"),
+            txn("m2", "a1", "2026-06-04", -9_500, "City Electric"),
+            txn("m3", "a1", "2026-07-06", -9_200, "City Electric"),
+        ];
+        // Same counterparty, same streak month as m3, but a one-off outlier
+        // amount: the closest-to-median occurrence must still win July.
+        txns.push(txn("x1", "a1", "2026-07-30", -100_000, "City Electric"));
+        let ctx = ctx_with_transactions(txns);
+        let series = monthly_series(&ctx);
+        assert_eq!(series.len(), 1);
+        assert_eq!(series[0].representatives.len(), 3);
+        assert!(
+            series[0]
+                .representatives
+                .iter()
+                .any(|t| t.external_id == "m3")
+        );
+        assert!(
+            !series[0]
+                .representatives
+                .iter()
+                .any(|t| t.external_id == "x1")
+        );
+    }
+}

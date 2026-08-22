@@ -89,6 +89,7 @@ mod tests {
             balances: Default::default(),
             account_names: Default::default(),
             account_currencies: Default::default(),
+            account_kinds: Default::default(),
         }
     }
 

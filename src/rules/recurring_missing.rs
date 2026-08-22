@@ -141,6 +141,7 @@ mod tests {
         assert_eq!(f.severity, Severity::Warn);
         assert_eq!(f.dedupe_key, "recurring-missing:city electric:2026-08");
         assert_eq!(f.evidence["expected_day"], 5);
+        assert_eq!(f.evidence["direction"], "outflow");
     }
 
     #[test]

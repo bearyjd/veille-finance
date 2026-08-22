@@ -19,6 +19,7 @@ pub struct AccountSnapshotRow {
     pub balance_minor: i64,
     pub currency: String,
     pub as_of_date: chrono::NaiveDate,
+    pub kind: String,
 }
 
 /// One persisted finding, as the digest reads it back.
@@ -530,7 +531,7 @@ impl Store {
     ) -> Result<Vec<AccountSnapshotRow>> {
         let up_to = up_to.to_rfc3339();
         let rows = sqlx::query!(
-            "SELECT external_id, name, balance_minor, currency, as_of \
+            "SELECT external_id, name, balance_minor, currency, as_of, kind \
              FROM account_snapshot WHERE tenant_id = ? AND as_of <= ? \
              ORDER BY as_of, external_id, id",
             tenant.0,
@@ -549,6 +550,7 @@ impl Store {
                         .map_err(|e| corrupt("account_snapshot.as_of", &e))?
                         .with_timezone(&Utc)
                         .date_naive(),
+                    kind: r.kind,
                 })
             })
             .collect()
