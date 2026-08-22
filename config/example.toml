@@ -27,6 +27,13 @@ base_url = "http://sure-example:3000"
 # user that owns (or has shares to) every watched account.
 api_key_env = "VEILLE_API_KEY_EXAMPLE"
 
+# Per-tenant rule thresholds (all optional; defaults shown):
+# [tenants.thresholds]
+# duplicate_window_days = 3          # duplicate-charge: identical outflows within N days
+# duplicate_floor_minor = 2500       # duplicate-charge: ignore pairs under this amount
+# balance_floor_minor = 50000        # balance-floor: absent = rule disabled (opt-in)
+# recurring_price_increase_pct = 20  # recurring-price-change: fire above this % increase
+
 # Digest and alert recipients (PRP §2.2, §9). Roles are for validation and
 # the audit trail only — every delivery reaches owners AND watchers, always.
 # A tenant with watchers but no owner is rejected at startup.
