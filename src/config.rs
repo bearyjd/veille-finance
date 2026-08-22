@@ -138,6 +138,19 @@ pub struct RuleThresholds {
     pub recurring_min_occurrences: u32,
     /// `recurring-missing`: +/- days around the expected day of month.
     pub recurring_day_window: u32,
+    /// `duplicate-charge`: two identical charges within this many days are a
+    /// suspected duplicate.
+    pub duplicate_window_days: u32,
+    /// `duplicate-charge`: identical charges below this amount (minor units)
+    /// are routine, not a defect — two identical coffees must stay quiet.
+    pub duplicate_floor_minor: i64,
+    /// `balance-floor`: alert when a cash account's latest balance is below
+    /// this absolute amount (minor units). `None` disables the rule — set it
+    /// per tenant to the account owner's real comfort line.
+    pub balance_floor_minor: Option<i64>,
+    /// `recurring-price-change`: a monthly series' newest charge exceeding
+    /// its prior usual amount by more than this percentage fires.
+    pub recurring_price_increase_pct: u32,
 }
 
 impl Default for RuleThresholds {
@@ -150,6 +163,10 @@ impl Default for RuleThresholds {
             new_counterparty_floor_minor: 50_000,
             recurring_min_occurrences: 3,
             recurring_day_window: 5,
+            duplicate_window_days: 3,
+            duplicate_floor_minor: 2_500,
+            balance_floor_minor: None,
+            recurring_price_increase_pct: 20,
         }
     }
 }

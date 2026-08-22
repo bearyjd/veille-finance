@@ -4,10 +4,14 @@
 //! de-escalates one (PRP §2.4).
 
 pub mod balance_band;
+pub mod balance_floor;
 pub mod dormant_card_wake;
+pub mod duplicate_charge;
 pub mod large_transfer;
 pub mod new_counterparty;
 pub mod recurring_missing;
+pub mod recurring_price_change;
+pub(crate) mod series;
 pub mod sync_stale;
 
 use std::collections::BTreeMap;
@@ -96,6 +100,9 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(dormant_card_wake::DormantCardWake),
         Box::new(balance_band::BalanceBand),
         Box::new(recurring_missing::RecurringMissing),
+        Box::new(duplicate_charge::DuplicateCharge),
+        Box::new(balance_floor::BalanceFloor),
+        Box::new(recurring_price_change::RecurringPriceChange),
     ]
 }
 
