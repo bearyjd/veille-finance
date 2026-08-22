@@ -45,6 +45,12 @@ impl Rule for RecurringPriceChange {
             let Some(newest) = newest.first() else {
                 continue;
             };
+            // A rising deposit is a raise, not a price hike, and a growing savings
+            // transfer is good news — this rule judges outflow charges only
+            // (mirrors duplicate-charge's filter).
+            if newest.amount_minor >= 0 || newest.is_transfer {
+                continue;
+            }
             let prior_amounts: Vec<u128> = prior
                 .into_iter()
                 .map(|t| u128::from(t.amount_minor.unsigned_abs()))
@@ -79,8 +85,8 @@ impl Rule for RecurringPriceChange {
                     "counterparty": series.counterparty,
                     "month": format_month(current_month),
                     "new_amount_minor": newest.amount_minor,
-                    "usual_amount_minor": usual.to_string(),
-                    "increase_pct": increase_pct.to_string(),
+                    "usual_amount_minor": i64::try_from(usual).unwrap_or(i64::MAX),
+                    "increase_pct": i64::try_from(increase_pct).unwrap_or(i64::MAX),
                     "currency": newest.currency,
                 }),
                 dedupe_key: format!(
@@ -200,5 +206,41 @@ mod tests {
         let mut ctx = ctx_with_transactions(subscription(-15_99));
         ctx.thresholds.recurring_price_increase_pct = 80;
         assert!(RecurringPriceChange.evaluate(&ctx).is_empty());
+    }
+
+    #[test]
+    fn rising_deposits_are_not_price_hikes() {
+        // A payroll deposit growing month over month is a raise, not a
+        // price increase — this rule judges outflow charges only.
+        let txns = vec![
+            txn("s1", "a1", "2026-05-12", 250_000, "Acme Payroll"),
+            txn("s2", "a1", "2026-06-12", 250_000, "Acme Payroll"),
+            txn("s3", "a1", "2026-07-12", 250_000, "Acme Payroll"),
+            txn("s4", "a1", "2026-08-12", 330_000, "Acme Payroll"),
+        ];
+        assert!(
+            RecurringPriceChange
+                .evaluate(&ctx_with_transactions(txns))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn rising_recurring_transfers_stay_quiet() {
+        // A growing automated savings transfer is good news, not a finding.
+        let mut s1 = txn("s1", "a1", "2026-05-12", -250_000, "Auto Savings");
+        s1.is_transfer = true;
+        let mut s2 = txn("s2", "a1", "2026-06-12", -250_000, "Auto Savings");
+        s2.is_transfer = true;
+        let mut s3 = txn("s3", "a1", "2026-07-12", -250_000, "Auto Savings");
+        s3.is_transfer = true;
+        let mut s4 = txn("s4", "a1", "2026-08-12", -330_000, "Auto Savings");
+        s4.is_transfer = true;
+        let txns = vec![s1, s2, s3, s4];
+        assert!(
+            RecurringPriceChange
+                .evaluate(&ctx_with_transactions(txns))
+                .is_empty()
+        );
     }
 }

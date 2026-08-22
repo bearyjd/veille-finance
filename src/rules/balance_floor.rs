@@ -9,6 +9,13 @@
 //! nature. The exemption keys on the median of PRIOR history, not "ever
 //! negative" — a checking account that once overdrafted is exactly the
 //! account this rule must keep watching. A first observation is never judged.
+//!
+//! Episode identity: v1 has no clearing path (findings are never explicitly
+//! resolved), so the dedupe key must carry the episode itself rather than
+//! rely on it being cleared. The key is scoped to the current consecutive
+//! below-floor run, identified by that run's first date — a continuing
+//! breach stays one episode, and a recovery followed by a later re-breach is
+//! a new one (mirrors `sync-stale`'s last-success discriminator).
 
 use serde_json::json;
 
@@ -41,6 +48,17 @@ impl Rule for BalanceFloor {
                 continue;
             }
             let currency = ctx.account_currency(account_id);
+            // Episode identity: the first day of the current below-floor run. A
+            // continuing breach stays one episode; recovery followed by a later
+            // re-breach is a new one (same pattern as sync-stale's last-success
+            // discriminator — v1 has no clearing path, so the key must carry it).
+            let episode_start = series
+                .iter()
+                .rev()
+                .take_while(|p| p.balance_minor < floor)
+                .last()
+                .map(|p| p.date)
+                .unwrap_or(latest.date);
             findings.push(Finding {
                 rule_id: self.id().to_string(),
                 severity: Severity::Alert,
@@ -58,7 +76,7 @@ impl Rule for BalanceFloor {
                     "currency": currency,
                     "as_of": latest.date.to_string(),
                 }),
-                dedupe_key: format!("balance-floor:{account_id}"),
+                dedupe_key: format!("balance-floor:{account_id}:{episode_start}"),
                 detected_at: ctx.now,
             });
         }
@@ -115,7 +133,7 @@ mod tests {
         assert_eq!(findings.len(), 1);
         let f = &findings[0];
         assert_eq!(f.severity, Severity::Alert);
-        assert_eq!(f.dedupe_key, "balance-floor:a1");
+        assert_eq!(f.dedupe_key, "balance-floor:a1:2026-08-17");
         assert_eq!(f.evidence["floor_minor"], 50_000);
     }
 
@@ -193,10 +211,35 @@ mod tests {
                 ("2026-08-17", 20_000),
             ],
         );
+        let key_one = BalanceFloor.evaluate(&day_one)[0].dedupe_key.clone();
+        let key_two = BalanceFloor.evaluate(&day_two)[0].dedupe_key.clone();
         assert_eq!(
-            BalanceFloor.evaluate(&day_one)[0].dedupe_key,
-            BalanceFloor.evaluate(&day_two)[0].dedupe_key,
+            key_one, key_two,
             "a continuing breach is one episode, not one finding per day"
         );
+        // The run started 2026-08-16 in both cases (the day the balance first
+        // dropped below the floor and never recovered).
+        assert_eq!(key_one, "balance-floor:a1:2026-08-16");
+    }
+
+    #[test]
+    fn recovery_then_rebreach_is_a_new_episode() {
+        let first_breach = ctx_with_series("a1", &[("2026-08-10", 90_000), ("2026-08-11", 30_000)]);
+        let second_breach = ctx_with_series(
+            "a1",
+            &[
+                ("2026-08-10", 90_000),
+                ("2026-08-11", 30_000),
+                ("2026-08-12", 60_000),
+                ("2026-08-13", 20_000),
+            ],
+        );
+        let findings_first = BalanceFloor.evaluate(&first_breach);
+        let findings_second = BalanceFloor.evaluate(&second_breach);
+        assert_eq!(findings_first.len(), 1);
+        assert_eq!(findings_second.len(), 1);
+        assert_eq!(findings_first[0].dedupe_key, "balance-floor:a1:2026-08-11");
+        assert_eq!(findings_second[0].dedupe_key, "balance-floor:a1:2026-08-13");
+        assert_ne!(findings_first[0].dedupe_key, findings_second[0].dedupe_key);
     }
 }

@@ -40,7 +40,9 @@ impl Rule for DuplicateCharge {
         for ((account, counterparty, amount_minor), txns) in clusters {
             // Split cluster into maximal temporal chains: a txn joins the current
             // chain when its gap from the chain's previous txn is <= window days,
-            // else starts a new chain.
+            // else starts a new chain. Relies on `ctx.transactions` (and thus
+            // `ctx.recent_transactions()`) being ascending by (posted_at,
+            // external_id), so each chain accumulates in chronological order.
             let mut chains: Vec<Vec<&Transaction>> = Vec::new();
             for txn in txns {
                 if let Some(last_chain) = chains.last_mut()
@@ -60,19 +62,32 @@ impl Rule for DuplicateCharge {
                 if chain.len() < 2 {
                     continue;
                 }
-                let (first, second) = (chain[0], chain[1]);
-                findings.push(Finding {
-                    rule_id: self.id().to_string(),
-                    severity: Severity::Warn,
-                    subject: format!("account:{}", ctx.account_name(account)),
-                    summary: format!(
+                let first = chain[0];
+                let last = chain[chain.len() - 1];
+                let summary = if chain.len() == 2 {
+                    format!(
                         "\u{2018}{}\u{2019} charged {} twice within {} day(s): {} and {}.",
                         counterparty,
                         crate::domain::format_minor(amount_minor, &first.currency),
                         window,
                         first.posted_at,
-                        second.posted_at,
-                    ),
+                        last.posted_at,
+                    )
+                } else {
+                    format!(
+                        "\u{2018}{}\u{2019} charged {} {} times between {} and {}.",
+                        counterparty,
+                        crate::domain::format_minor(amount_minor, &first.currency),
+                        chain.len(),
+                        first.posted_at,
+                        last.posted_at,
+                    )
+                };
+                findings.push(Finding {
+                    rule_id: self.id().to_string(),
+                    severity: Severity::Warn,
+                    subject: format!("account:{}", ctx.account_name(account)),
+                    summary,
                     evidence: json!({
                         "account": account,
                         "counterparty": counterparty,
@@ -191,6 +206,23 @@ mod tests {
                 .evaluate(&ctx_with_transactions(txns))
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn summary_counts_all_occurrences() {
+        // A 3+ member chain must not claim "twice" — the summary should
+        // agree with the evidence's occurrence count and span.
+        let txns = vec![
+            txn("d1", "a1", "2026-08-09", -12_999, "Streaming Co"),
+            txn("d2", "a1", "2026-08-10", -12_999, "Streaming Co"),
+            txn("d3", "a1", "2026-08-11", -12_999, "Streaming Co"),
+        ];
+        let findings = DuplicateCharge.evaluate(&ctx_with_transactions(txns));
+        assert_eq!(findings.len(), 1);
+        let summary = &findings[0].summary;
+        assert!(summary.contains("3 times"), "summary was: {summary}");
+        assert!(summary.contains("2026-08-09"), "summary was: {summary}");
+        assert!(summary.contains("2026-08-11"), "summary was: {summary}");
     }
 
     #[test]
