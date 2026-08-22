@@ -52,6 +52,10 @@ pub struct EvalContext {
     pub account_names: BTreeMap<String, String>,
     /// Account currencies keyed by external id (latest snapshot wins).
     pub account_currencies: BTreeMap<String, String>,
+    /// Account kind keyed by external id (latest snapshot wins), Sure
+    /// vocabulary verbatim: depository, credit_card, investment, loan,
+    /// crypto, property, vehicle, other_asset, other_liability.
+    pub account_kinds: BTreeMap<String, String>,
 }
 
 pub trait Rule: Send + Sync {
@@ -172,6 +176,7 @@ pub async fn build_context(
     let mut balances: BTreeMap<String, Vec<BalancePoint>> = BTreeMap::new();
     let mut account_names: BTreeMap<String, String> = BTreeMap::new();
     let mut account_currencies: BTreeMap<String, String> = BTreeMap::new();
+    let mut account_kinds: BTreeMap<String, String> = BTreeMap::new();
     for row in store.account_snapshot_rows(tenant, now).await? {
         let series = balances.entry(row.external_id.clone()).or_default();
         match series.last_mut() {
@@ -183,6 +188,7 @@ pub async fn build_context(
             }),
         }
         account_currencies.insert(row.external_id.clone(), row.currency);
+        account_kinds.insert(row.external_id.clone(), row.kind);
         account_names.insert(row.external_id, row.name);
     }
 
@@ -194,6 +200,7 @@ pub async fn build_context(
         balances,
         account_names,
         account_currencies,
+        account_kinds,
     })
 }
 
@@ -221,6 +228,7 @@ pub(crate) mod test_support {
             balances: Default::default(),
             account_names: Default::default(),
             account_currencies: Default::default(),
+            account_kinds: Default::default(),
         }
     }
 
