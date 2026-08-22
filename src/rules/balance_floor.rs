@@ -4,11 +4,17 @@
 //! account?", the floor asks "is this simply too low, full stop?" — the
 //! imminent-overdraft class of finding, so it is an Alert.
 //!
-//! Liability accounts are exempt: an account whose typical observed balance
-//! is negative (credit cards, lines of credit) lives below any cash floor by
-//! nature. The exemption keys on the median of PRIOR history, not "ever
-//! negative" — a checking account that once overdrafted is exactly the
-//! account this rule must keep watching. A first observation is never judged.
+//! Liability accounts are exempt, keyed primarily on the account's declared
+//! kind (Sure vocabulary, stored verbatim: depository, credit_card,
+//! investment, loan, crypto, property, vehicle, other_asset,
+//! other_liability). A `depository` account is judged unconditionally —
+//! regardless of its balance history's sign, since a chronically overdrawn
+//! checking account is exactly what this rule must watch. Any other declared
+//! kind is exempt: a card or loan below a cash floor is its normal state.
+//! When the kind is unknown (unset or empty — a store synced before kind
+//! plumbing existed), the rule falls back to the prior heuristic: exempt if
+//! the median of PRIOR history is negative. A first observation is never
+//! judged, regardless of kind.
 //!
 //! Episode identity: v1 has no clearing path (findings are never explicitly
 //! resolved), so the dedupe key must carry the episode itself rather than
@@ -41,8 +47,18 @@ impl Rule for BalanceFloor {
             if history.is_empty() {
                 continue;
             }
-            if median_minor(history.iter().map(|p| p.balance_minor)) < 0 {
-                continue;
+            match ctx.account_kinds.get(account_id).map(String::as_str) {
+                // Declared depository: judge regardless of history's sign.
+                Some("depository") => {}
+                // Unknown kind: fall back to the median-of-history heuristic.
+                Some("") | None => {
+                    if median_minor(history.iter().map(|p| p.balance_minor)) < 0 {
+                        continue;
+                    }
+                }
+                // Any other declared kind (credit_card, loan, investment,
+                // ...): below-floor is that account's normal state.
+                Some(_) => continue,
             }
             if latest.balance_minor >= floor {
                 continue;
@@ -123,6 +139,8 @@ mod tests {
             .insert(account.to_string(), "Everyday Checking".to_string());
         ctx.account_currencies
             .insert(account.to_string(), "USD".to_string());
+        ctx.account_kinds
+            .insert(account.to_string(), "depository".to_string());
         ctx
     }
 
@@ -152,8 +170,9 @@ mod tests {
 
     #[test]
     fn liability_accounts_are_exempt() {
-        // Median history negative: a credit card, not a cash account.
-        let ctx = ctx_with_series(
+        // Declared kind is credit_card, not depository: exempt regardless of
+        // balance history.
+        let mut ctx = ctx_with_series(
             "card",
             &[
                 ("2026-08-14", -120_000),
@@ -161,6 +180,38 @@ mod tests {
                 ("2026-08-16", -100_000),
             ],
         );
+        ctx.account_kinds
+            .insert("card".to_string(), "credit_card".to_string());
+        assert!(BalanceFloor.evaluate(&ctx).is_empty());
+    }
+
+    #[test]
+    fn distressed_depository_still_judged() {
+        // Declared kind is depository: judged regardless of a
+        // majority-negative history — this is the inversion fix. Previously
+        // the median heuristic would have read this as a liability account
+        // and exempted it, but a chronically overdrawn checking account is
+        // exactly what this rule must watch.
+        let ctx = ctx_with_series("a1", &[("2026-08-14", -90_000), ("2026-08-15", -80_000)]);
+        let findings = BalanceFloor.evaluate(&ctx);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].evidence["balance_minor"], -80_000);
+    }
+
+    #[test]
+    fn unknown_kind_falls_back_to_median_heuristic() {
+        // No kind recorded for this account (a store synced before kind
+        // plumbing existed): fall back to the median-of-history heuristic.
+        // Negative median reads as a liability account, so it stays exempt.
+        let mut ctx = ctx_with_series(
+            "a1",
+            &[
+                ("2026-08-14", -120_000),
+                ("2026-08-15", -90_000),
+                ("2026-08-16", -100_000),
+            ],
+        );
+        ctx.account_kinds.remove("a1");
         assert!(BalanceFloor.evaluate(&ctx).is_empty());
     }
 
