@@ -138,6 +138,12 @@ pub struct RuleThresholds {
     pub recurring_min_occurrences: u32,
     /// `recurring-missing`: +/- days around the expected day of month.
     pub recurring_day_window: u32,
+    /// `duplicate-charge`: two identical charges within this many days are a
+    /// suspected duplicate.
+    pub duplicate_window_days: u32,
+    /// `duplicate-charge`: identical charges below this amount (minor units)
+    /// are routine, not a defect — two identical coffees must stay quiet.
+    pub duplicate_floor_minor: i64,
 }
 
 impl Default for RuleThresholds {
@@ -150,6 +156,8 @@ impl Default for RuleThresholds {
             new_counterparty_floor_minor: 50_000,
             recurring_min_occurrences: 3,
             recurring_day_window: 5,
+            duplicate_window_days: 3,
+            duplicate_floor_minor: 2_500,
         }
     }
 }

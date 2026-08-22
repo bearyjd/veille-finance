@@ -5,6 +5,7 @@
 
 pub mod balance_band;
 pub mod dormant_card_wake;
+pub mod duplicate_charge;
 pub mod large_transfer;
 pub mod new_counterparty;
 pub mod recurring_missing;
@@ -96,6 +97,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(dormant_card_wake::DormantCardWake),
         Box::new(balance_band::BalanceBand),
         Box::new(recurring_missing::RecurringMissing),
+        Box::new(duplicate_charge::DuplicateCharge),
     ]
 }
 
