@@ -133,6 +133,12 @@ impl Rule for RecurringMissing {
                 continue;
             }
 
+            // Direction decides severity: a missed bill reads fine in the
+            // Sunday digest, but a missed deposit (pension, payroll, Social
+            // Security) is the most time-critical signal this tool watches —
+            // Alert, so the push channel carries it the same day.
+            let is_inflow = representatives.iter().all(|t| t.amount_minor > 0);
+
             let mut days: Vec<u32> = representatives.iter().map(|t| t.posted_at.day()).collect();
             days.sort_unstable();
             let expected_day = median_day(&days);
@@ -145,7 +151,11 @@ impl Rule for RecurringMissing {
 
             findings.push(Finding {
                 rule_id: self.id().to_string(),
-                severity: Severity::Warn,
+                severity: if is_inflow {
+                    Severity::Alert
+                } else {
+                    Severity::Warn
+                },
                 subject: format!("counterparty:{counterparty}"),
                 summary: format!(
                     "Expected monthly \u{2018}{}\u{2019} (about {} around day {}) has not appeared for {}.",
@@ -164,6 +174,7 @@ impl Rule for RecurringMissing {
                     "months_in_streak": min_occurrences,
                     "typical_amount_minor": last.amount_minor,
                     "currency": last.currency,
+                    "direction": if is_inflow { "inflow" } else { "outflow" },
                 }),
                 dedupe_key: format!(
                     "recurring-missing:{counterparty}:{}",
@@ -317,7 +328,7 @@ mod tests {
     }
 
     #[test]
-    fn missed_deposits_fire_too() {
+    fn missed_deposits_fire_as_alert() {
         let txns = vec![
             txn("p1", "a1", "2026-05-01", 250_000, "Acme Payroll"),
             txn("p2", "a1", "2026-06-01", 250_000, "Acme Payroll"),
@@ -326,9 +337,29 @@ mod tests {
         let findings = RecurringMissing.evaluate(&ctx_with_transactions(txns));
         assert_eq!(findings.len(), 1);
         assert_eq!(
+            findings[0].severity,
+            Severity::Alert,
+            "a missed deposit must push immediately, not wait for Sunday"
+        );
+        assert_eq!(findings[0].evidence["direction"], "inflow");
+        assert_eq!(
             findings[0].dedupe_key,
             "recurring-missing:acme payroll:2026-08"
         );
+    }
+
+    #[test]
+    fn mixed_direction_series_stays_warn() {
+        // Regular |amounts|, alternating sign: not clearly income.
+        let txns = vec![
+            txn("m1", "a1", "2026-05-05", 9_000, "Odd Ledger"),
+            txn("m2", "a1", "2026-06-04", -9_000, "Odd Ledger"),
+            txn("m3", "a1", "2026-07-06", 9_000, "Odd Ledger"),
+        ];
+        let findings = RecurringMissing.evaluate(&ctx_with_transactions(txns));
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Warn);
+        assert_eq!(findings[0].evidence["direction"], "outflow");
     }
 
     #[test]
