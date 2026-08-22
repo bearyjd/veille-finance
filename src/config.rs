@@ -148,6 +148,9 @@ pub struct RuleThresholds {
     /// this absolute amount (minor units). `None` disables the rule — set it
     /// per tenant to the account owner's real comfort line.
     pub balance_floor_minor: Option<i64>,
+    /// `recurring-price-change`: a monthly series' newest charge exceeding
+    /// its prior usual amount by more than this percentage fires.
+    pub recurring_price_increase_pct: u32,
 }
 
 impl Default for RuleThresholds {
@@ -163,6 +166,7 @@ impl Default for RuleThresholds {
             duplicate_window_days: 3,
             duplicate_floor_minor: 2_500,
             balance_floor_minor: None,
+            recurring_price_increase_pct: 20,
         }
     }
 }
