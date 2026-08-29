@@ -28,7 +28,7 @@ base_url = "http://sure-example:3000"
 api_key_env = "VEILLE_API_KEY_EXAMPLE"
 
 # Per-tenant rule thresholds (all optional; defaults shown):
-# [tenants.thresholds]
+# [tenants.rules]
 # duplicate_window_days = 3          # duplicate-charge: identical outflows within N days
 # duplicate_floor_minor = 2500       # duplicate-charge: ignore pairs under this amount
 # balance_floor_minor = 50000        # balance-floor: applies to every non-liability account in the tenant, not a single account; absent = rule disabled (opt-in)
