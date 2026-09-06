@@ -42,6 +42,16 @@ const RATE_LIMIT_RETRIES: u32 = 2;
 const RETRY_AFTER_DEFAULT: Duration = Duration::from_secs(300);
 const RETRY_AFTER_CAP: Duration = Duration::from_secs(3900);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// Ceiling on a single response body. `reqwest`'s `.json()` buffers the whole
+/// body with no cap of its own, so a compromised or MITM'd upstream could
+/// answer a paged request with gigabytes and OOM the process — the caps above
+/// bound the *number* of pages and the *requested* `per_page`, neither of
+/// which bounds what the server actually sends back. One page is at most
+/// `PER_PAGE` small records; even with generously long names that is a few
+/// hundred KB, so this leaves roughly 20x headroom over any legitimate page.
+/// Mirrors `narrate/llm.rs`'s `MAX_RESPONSE_BYTES`, which already does this
+/// for the other network surface.
+const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 
 /// A GET-only HTTP client. Deliberately incapable of any other verb.
 struct ReadOnlyHttp {
@@ -65,7 +75,7 @@ impl ReadOnlyHttp {
 
         let mut rate_limit_attempts = 0u32;
         loop {
-            let response = self
+            let mut response = self
                 .client
                 .get(url.clone())
                 .header("X-Api-Key", self.api_key.clone())
@@ -103,9 +113,22 @@ impl ReadOnlyHttp {
                     "GET {path} returned HTTP {status}"
                 )));
             }
-            return response
-                .json::<T>()
+            // Bounded read rather than `.json()`: see MAX_RESPONSE_BYTES.
+            // The body is upstream-controlled, so its size is too.
+            let mut body_bytes: Vec<u8> = Vec::new();
+            while let Some(chunk) = response
+                .chunk()
                 .await
+                .map_err(|e| SourceError::Request(format!("GET {path}: read: {e}")))?
+            {
+                body_bytes.extend_from_slice(&chunk);
+                if body_bytes.len() > MAX_RESPONSE_BYTES {
+                    return Err(SourceError::Contract(format!(
+                        "GET {path}: response exceeded {MAX_RESPONSE_BYTES} bytes"
+                    )));
+                }
+            }
+            return serde_json::from_slice(&body_bytes)
                 .map_err(|e| SourceError::Contract(format!("GET {path}: {e}")));
         }
     }
