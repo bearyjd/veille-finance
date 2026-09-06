@@ -419,3 +419,52 @@ async fn health_reuses_the_accounts_fetch_and_every_request_is_a_get() {
         );
     }
 }
+
+/// Security fix (2026-09-05 audit, input-parsing lens): `reqwest`'s `.json()`
+/// buffers a whole response body with no cap, so a compromised or MITM'd
+/// upstream could answer a single page with gigabytes and OOM the process.
+/// The page-count and `per_page` caps do not bound what the server actually
+/// sends. The client now reads with a byte ceiling, like `narrate/llm.rs`.
+#[tokio::test]
+async fn oversized_response_body_is_refused_not_buffered() {
+    let server = MockServer::start().await;
+    // One well-formed row, then a name field far past any legitimate page.
+    let huge_name = "A".repeat(5 * 1024 * 1024);
+    Mock::given(method("GET"))
+        .and(path("/api/v1/accounts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "accounts": [wire_account("a-1", &huge_name, None)],
+            "pagination": pagination(1, 1, 1)
+        })))
+        .mount(&server)
+        .await;
+
+    let source = source_for(&server).await;
+    let err = source
+        .accounts()
+        .await
+        .expect_err("an oversized body must be refused, not buffered");
+    let message = err.to_string();
+    assert!(
+        message.contains("exceeded"),
+        "expected a size-ceiling error, got: {message}"
+    );
+}
+
+/// The ceiling must not reject ordinary traffic: a normal page still parses.
+#[tokio::test]
+async fn ordinary_response_body_is_still_accepted() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/accounts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "accounts": [wire_account("a-1", "One", None)],
+            "pagination": pagination(1, 1, 1)
+        })))
+        .mount(&server)
+        .await;
+
+    let source = source_for(&server).await;
+    let accounts = source.accounts().await.expect("a normal page still parses");
+    assert_eq!(accounts.len(), 1);
+}
